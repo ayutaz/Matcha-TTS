@@ -142,3 +142,76 @@ def ipa_simplifier(text):
 #     phonemes = "".join(piper_phonemize.phonemize_espeak(text=text, voice="en-US")[0])
 #     phonemes = collapse_whitespace(phonemes)
 #     return phonemes
+
+
+# === Japanese cleaners (pyopenjtalk + ttslearn-compatible prosody) ===
+
+_PHONEME_RE = re.compile(r"-([^+]+)\+")
+_A1_RE = re.compile(r"/A:([0-9-]+)\+")
+_A2_RE = re.compile(r"\+(\d+)\+")
+_F1_RE = re.compile(r"/F:(\d+)_")
+
+
+def _fullcontext_to_prosody(labels):
+    """Convert HTS full-context labels to prosody-annotated phoneme sequence.
+
+    This follows the ttslearn ``pp_symbols`` convention:
+      - ``^`` / ``$`` / ``?`` : utterance start / end / pause-end
+      - ``_`` : pause (pau)
+      - ``#`` : accent phrase boundary
+      - ``[`` / ``]`` : pitch rise / fall
+    """
+    phonemes = []
+    for i, label in enumerate(labels):
+        # Extract phoneme (p3 field)
+        m = _PHONEME_RE.search(label)
+        if m is None:
+            continue
+        ph = m.group(1)
+
+        # Handle silence / pause
+        if ph == "sil":
+            # First sil -> ^, last sil -> $, others -> ? (shouldn't appear normally)
+            if i == 0:
+                phonemes.append("^")
+            elif i == len(labels) - 1:
+                phonemes.append("$")
+            else:
+                phonemes.append("?")
+            continue
+        if ph == "pau":
+            phonemes.append("_")
+            continue
+
+        # Extract accent features
+        a1 = int(_A1_RE.search(label).group(1))  # mora position in accent phrase
+        a2 = int(_A2_RE.search(label).group(1))  # accent nucleus position
+        f1 = int(_F1_RE.search(label).group(1))  # mora count in accent phrase
+
+        # Accent phrase boundary
+        a2_next = int(_A2_RE.search(labels[i + 1]).group(1)) if i + 1 < len(labels) else -1
+        if a1 == 1 and a2_next == 1:
+            phonemes.append("#")
+
+        # Pitch rise / fall markers
+        if a2 == 1 and a1 == 1:
+            phonemes.append("[")
+        elif a1 == a2 + 1 and a2 != f1:
+            phonemes.append("]")
+
+        phonemes.append(ph)
+
+    return phonemes
+
+
+def japanese_cleaners(text):
+    """Pipeline for Japanese text using pyopenjtalk (lazy-imported).
+
+    Returns a **space-separated** phoneme string with prosody markers,
+    compatible with ``symbols_ja``.
+    """
+    import pyopenjtalk  # lazy import — only needed when language="ja"
+
+    labels = pyopenjtalk.extract_fullcontext(text)
+    phonemes = _fullcontext_to_prosody(labels)
+    return " ".join(phonemes)

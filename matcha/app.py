@@ -28,6 +28,7 @@ args = Namespace(
 )
 
 CURRENTLY_LOADED_MODEL = args.model
+CURRENT_LANGUAGE = "en"
 
 
 def MATCHA_TTS_LOC(x):
@@ -43,10 +44,17 @@ RADIO_OPTIONS = {
     "マルチスピーカー (VCTK)": {
         "model": "matcha_vctk",
         "vocoder": "hifigan_univ_v1",
+        "language": "en",
     },
     "シングルスピーカー (LJ Speech)": {
         "model": "matcha_ljspeech",
         "vocoder": "hifigan_T2_v1",
+        "language": "en",
+    },
+    "日本語 (JSUT)": {
+        "model": "matcha_jsut",
+        "vocoder": "hifigan_univ_v1",
+        "language": "ja",
     },
 }
 
@@ -71,21 +79,31 @@ def load_model(model_name, vocoder_name):
 
 def load_model_ui(model_type, textbox):
     model_name, vocoder_name = RADIO_OPTIONS[model_type]["model"], RADIO_OPTIONS[model_type]["vocoder"]
+    language = RADIO_OPTIONS[model_type]["language"]
 
-    global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
+    global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
     if model_name != CURRENTLY_LOADED_MODEL:
         model, vocoder, denoiser = load_model(model_name, vocoder_name)
         CURRENTLY_LOADED_MODEL = model_name
+    CURRENT_LANGUAGE = language
 
     if model_name == "matcha_ljspeech":
         spk_slider = gr.Slider(visible=False, value=-1)
         single_speaker_examples = gr.Row(visible=True)
         multi_speaker_examples = gr.Row(visible=False)
+        japanese_examples = gr.Row(visible=False)
         length_scale = gr.Slider(value=0.95)
+    elif model_name == "matcha_jsut":
+        spk_slider = gr.Slider(visible=False, value=-1)
+        single_speaker_examples = gr.Row(visible=False)
+        multi_speaker_examples = gr.Row(visible=False)
+        japanese_examples = gr.Row(visible=True)
+        length_scale = gr.Slider(value=1.0)
     else:
         spk_slider = gr.Slider(visible=True, value=0)
         single_speaker_examples = gr.Row(visible=False)
         multi_speaker_examples = gr.Row(visible=True)
+        japanese_examples = gr.Row(visible=False)
         length_scale = gr.Slider(value=0.85)
 
     return (
@@ -94,13 +112,15 @@ def load_model_ui(model_type, textbox):
         spk_slider,
         single_speaker_examples,
         multi_speaker_examples,
+        japanese_examples,
         length_scale,
     )
 
 
 @torch.inference_mode()
 def process_text_gradio(text):
-    output = process_text(1, text, device)
+    cleaners = ["japanese_cleaners"] if CURRENT_LANGUAGE == "ja" else None
+    output = process_text(1, text, device, cleaners=cleaners, language=CURRENT_LANGUAGE)
     return output["x_phones"][1::2], output["x"], output["x_lengths"]
 
 
@@ -123,11 +143,12 @@ def synthesise_mel(text, text_length, n_timesteps, temperature, length_scale, sp
 
 
 def multispeaker_example_cacher(text, n_timesteps, mel_temp, length_scale, spk):
-    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
+    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_vctk":
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_vctk", "hifigan_univ_v1")
         CURRENTLY_LOADED_MODEL = "matcha_vctk"
+    CURRENT_LANGUAGE = "en"
 
     phones, text, text_lengths = process_text_gradio(text)
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
@@ -135,11 +156,25 @@ def multispeaker_example_cacher(text, n_timesteps, mel_temp, length_scale, spk):
 
 
 def ljspeech_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
-    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
+    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_ljspeech":
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_ljspeech", "hifigan_T2_v1")
         CURRENTLY_LOADED_MODEL = "matcha_ljspeech"
+    CURRENT_LANGUAGE = "en"
+
+    phones, text, text_lengths = process_text_gradio(text)
+    audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
+    return phones, audio, mel_spectrogram
+
+
+def jsut_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
+    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
+    if CURRENTLY_LOADED_MODEL != "matcha_jsut":
+        global model, vocoder, denoiser  # pylint: disable=global-statement
+        model, vocoder, denoiser = load_model("matcha_jsut", "hifigan_univ_v1")
+        CURRENTLY_LOADED_MODEL = "matcha_jsut"
+    CURRENT_LANGUAGE = "ja"
 
     phones, text, text_lengths = process_text_gradio(text)
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
@@ -327,10 +362,51 @@ def main():
                 label="マルチスピーカー サンプル",
             )
 
+        with gr.Row(visible=False) as example_row_japanese:
+            gr.Examples(
+                examples=[
+                    [
+                        "ようこそ、音声合成の世界へ。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "今日はとても良い天気ですね。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "条件付きフローマッチングを用いた高速な音声合成システムです。",
+                        50,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "吾輩は猫である。名前はまだ無い。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "東京は日本の首都であり、世界最大の都市圏の一つです。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                ],
+                fn=jsut_example_cacher,
+                inputs=[text, n_timesteps, mel_temp, length_scale],
+                outputs=[phonetised_text, audio, mel_spectrogram],
+                cache_examples=False,
+                label="日本語 サンプル",
+            )
+
         model_type.change(lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
             load_model_ui,
             inputs=[model_type, text],
-            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, length_scale],
+            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, example_row_japanese, length_scale],
         )
 
         synth_btn.click(

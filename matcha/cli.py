@@ -45,15 +45,17 @@ def plot_spectrogram_to_numpy(spectrogram, filename):
     plt.savefig(filename)
 
 
-def process_text(i: int, text: str, device: torch.device):
+def process_text(i: int, text: str, device: torch.device, cleaners=None, language="en"):
+    if cleaners is None:
+        cleaners = ["japanese_cleaners"] if language == "ja" else ["english_cleaners2"]
     print(f"[{i}] - Input text: {text}")
     x = torch.tensor(
-        intersperse(text_to_sequence(text, ["english_cleaners2"])[0], 0),
+        intersperse(text_to_sequence(text, cleaners, language=language)[0], 0),
         dtype=torch.long,
         device=device,
     )[None]
     x_lengths = torch.tensor([x.shape[-1]], dtype=torch.long, device=device)
-    x_phones = sequence_to_text(x.squeeze(0).tolist())
+    x_phones = sequence_to_text(x.squeeze(0).tolist(), language=language)
     print(f"[{i}] - Phonetised text: {x_phones[1::2]}")
 
     return {"x_orig": text, "x": x, "x_lengths": x_lengths, "x_phones": x_phones}
@@ -156,6 +158,9 @@ def validate_args(args):
     if args.batched:
         assert args.batch_size > 0, "Batch size must be greater than 0"
     assert args.speaking_rate > 0, "Speaking rate must be greater than 0"
+
+    if args.cleaners is None:
+        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
 
     return args
 
@@ -264,6 +269,20 @@ def cli():
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size only useful when --batched (default: 32)"
     )
+    parser.add_argument(
+        "--language",
+        type=str,
+        default="en",
+        choices=["en", "ja"],
+        help="Language for text processing (default: en)",
+    )
+    parser.add_argument(
+        "--cleaners",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Text cleaners to use (default: auto-selected based on --language)",
+    )
 
     args = parser.parse_args()
 
@@ -316,7 +335,7 @@ def batched_collate_fn(batch):
 def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
-    processed_text = [process_text(i, text, "cpu") for i, text in enumerate(texts)]
+    processed_text = [process_text(i, text, "cpu", cleaners=args.cleaners, language=args.language) for i, text in enumerate(texts)]
     dataloader = torch.utils.data.DataLoader(
         BatchedSynthesisDataset(processed_text),
         batch_size=args.batch_size,
@@ -365,7 +384,7 @@ def unbatched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
 
         print("".join(["="] * 100))
         text = text.strip()
-        text_processed = process_text(i, text, device)
+        text_processed = process_text(i, text, device, cleaners=args.cleaners, language=args.language)
 
         print(f"[🍵] Whisking Matcha-T(ea)TS for: {i}")
         start_t = dt.datetime.now()

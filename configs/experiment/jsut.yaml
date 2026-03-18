@@ -1,0 +1,14 @@
+# @package _global_
+
+# Japanese TTS training with JSUT corpus
+# To execute: python matcha/train.py experiment=jsut
+
+defaults:
+  - override /data: jsut.yaml
+
+tags: ["jsut", "japanese"]
+
+run_name: jsut
+
+model:
+  n_vocab: 52

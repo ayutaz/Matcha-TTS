@@ -63,6 +63,7 @@ onnx-gpu = [
 app = [
     "gradio>=4.0",
 ]
+japanese = ["pyopenjtalk-plus"]
 logging = [
     "wandb",
     "neptune-client",
