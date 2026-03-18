@@ -117,6 +117,7 @@ def main():
         help="Vocoder checkpoint to embed  in the ONNX graph for an `e2e` like experience",
     )
     parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 17)")
+    parser.add_argument("--quantize", default=False, action="store_true", help="Apply INT8 dynamic quantization after export")
 
     args = parser.parse_args()
 
@@ -190,6 +191,21 @@ def main():
         logger.info("ONNX model validation passed")
     except ImportError:
         logger.info("onnx package not available, skipping validation")
+
+    if args.quantize:
+        try:
+            from onnxruntime.quantization import quantize_dynamic, QuantType
+
+            quantized_path = str(args.output).replace(".onnx", "_int8.onnx")
+            print(f"[+] Quantizing model to INT8: {quantized_path}")
+            quantize_dynamic(
+                str(args.output),
+                quantized_path,
+                weight_type=QuantType.QInt8,
+            )
+            print(f"[+] Quantized model saved to: {quantized_path}")
+        except ImportError:
+            print("[!] onnxruntime-quantization not available. Install with: uv add onnxruntime")
 
 
 if __name__ == "__main__":

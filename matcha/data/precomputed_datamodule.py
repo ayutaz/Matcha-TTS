@@ -75,14 +75,20 @@ class PrecomputedTextMelDataset(Dataset):
     def __init__(self, pt_dir, n_spks, seed=None):
         self.pt_dir = Path(pt_dir)
         self.n_spks = n_spks
-        self.pt_paths = sorted(self.pt_dir.glob("*.pt"))
+        self.pt_paths = sorted(
+            os.path.join(str(self.pt_dir), entry.name)
+            for entry in os.scandir(str(self.pt_dir))
+            if entry.name.endswith(".pt") and entry.is_file()
+        )
 
         random.seed(seed)
         random.shuffle(self.pt_paths)
 
     def get_file_sizes(self) -> List[int]:
         """Return file sizes for all .pt files (proxy for mel length)."""
-        return [os.path.getsize(p) for p in self.pt_paths]
+        if not hasattr(self, '_file_sizes_cache') or self._file_sizes_cache is None:
+            self._file_sizes_cache = [os.path.getsize(p) for p in self.pt_paths]
+        return self._file_sizes_cache
 
     def __len__(self):
         return len(self.pt_paths)
@@ -141,7 +147,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
         bucket_sampler = BucketBatchSampler(
             file_sizes=self.trainset.get_file_sizes(),
             batch_size=self.hparams.batch_size,
-            drop_last=False,
+            drop_last=True,
             seed=self.hparams.seed or 0,
         )
 

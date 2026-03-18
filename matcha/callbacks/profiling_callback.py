@@ -1,8 +1,7 @@
 import time
-from typing import Any
 
 import torch
-from lightning import Callback, Trainer
+from lightning import Callback
 from lightning.pytorch.utilities.rank_zero import rank_zero_info, rank_zero_only
 
 
@@ -19,12 +18,14 @@ class ProfilingCallback(Callback):
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         if trainer.global_step >= self.skip_first:
-            torch.cuda.synchronize() if torch.cuda.is_available() else None
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             self.batch_start_time = time.perf_counter()
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if self.batch_start_time is not None and trainer.global_step >= self.skip_first:
-            torch.cuda.synchronize() if torch.cuda.is_available() else None
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             elapsed = time.perf_counter() - self.batch_start_time
             self.step_times.append(elapsed)
 

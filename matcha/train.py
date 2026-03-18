@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+import os
 import torch
 import hydra
 import lightning as L
@@ -59,6 +60,9 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
     """
+    # NCCL optimization for multi-GPU training
+    os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
@@ -70,7 +74,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     if cfg.get("compile_model", False):
-        compile_mode = cfg.get("compile_mode", "default")
+        compile_mode = cfg.get("compile_mode", "reduce-overhead")
         log.info("Compiling encoder and decoder with torch.compile (mode=%s)...", compile_mode)
         model.encoder = torch.compile(model.encoder, mode=compile_mode)
         model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
@@ -78,7 +82,14 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("gradient_checkpointing", False):
         if hasattr(model, "enable_gradient_checkpointing"):
             model.enable_gradient_checkpointing()
-            log.info("Gradient checkpointing enabled.")
+            # Verify gradient checkpointing is active on the decoder estimator
+            estimator = getattr(getattr(model, "decoder", None), "estimator", None)
+            if estimator is not None and getattr(estimator, "use_gradient_checkpointing", False):
+                log.info("Gradient checkpointing enabled and verified on decoder estimator.")
+            else:
+                log.warning(
+                    "Gradient checkpointing was requested but could not be verified on decoder estimator."
+                )
         else:
             log.warning("Model does not support enable_gradient_checkpointing(); skipping.")
 

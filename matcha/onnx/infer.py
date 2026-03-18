@@ -23,7 +23,54 @@ def validate_args(args):
     return args
 
 
-def write_wavs(model, inputs, output_dir, external_vocoder=None):
+def resolve_model_path(model_path, quantized):
+    """Resolve model path, handling INT8 quantized model selection.
+
+    When --quantized is passed, looks for a *_int8.onnx file derived from
+    the given model path.  These files are produced by
+    ``python -m matcha.onnx.export --quantize``.
+
+    Returns the resolved path as a string.
+    """
+    model_path = Path(model_path)
+
+    if quantized:
+        # Explicitly requested: derive the _int8 path from the given model
+        int8_path = model_path.with_name(model_path.stem + "_int8.onnx")
+        if int8_path.exists():
+            print(f"[+] Loading INT8 quantized model: {int8_path}")
+            return str(int8_path)
+        else:
+            raise FileNotFoundError(
+                f"Quantized model not found at {int8_path}. "
+                f"Generate one with: python -m matcha.onnx.export --quantize <checkpoint> {model_path}"
+            )
+
+    return str(model_path)
+
+
+def create_session_options(num_threads=None):
+    """Create optimised ONNX Runtime session options.
+
+    Args:
+        num_threads: Number of threads for intra/inter op parallelism.
+            Defaults to ``os.cpu_count()`` (capped at a sensible maximum).
+    """
+    if num_threads is None:
+        cpu_count = os.cpu_count() or 4
+        # Cap to avoid over-subscription on high-core machines
+        num_threads = min(cpu_count, 16)
+
+    sess_options = ort.SessionOptions()
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.intra_op_num_threads = num_threads
+    sess_options.inter_op_num_threads = num_threads
+    sess_options.enable_mem_pattern = True
+    sess_options.enable_cpu_mem_arena = True
+    return sess_options
+
+
+def write_wavs(model, inputs, output_dir, original_indices=None, external_vocoder=None):
     if external_vocoder is None:
         print("The provided model has the vocoder embedded in the graph.\nGenerating waveform directly")
         t0 = perf_counter()
@@ -47,7 +94,9 @@ def write_wavs(model, inputs, output_dir, external_vocoder=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     for i, (wav, wav_length) in enumerate(zip(wavs, wav_lengths)):
-        output_filename = output_dir.joinpath(f"output_{i + 1}.wav")
+        # Use original index for naming when inputs were re-sorted
+        out_idx = original_indices[i] if original_indices is not None else i
+        output_filename = output_dir.joinpath(f"output_{out_idx + 1}.wav")
         audio = wav[:wav_length]
         print(f"Writing audio to {output_filename}")
         sf.write(output_filename, audio, 22050, "PCM_24")
@@ -65,7 +114,7 @@ def write_wavs(model, inputs, output_dir, external_vocoder=None):
     print(f"Overall RTF: {rtf}")
 
 
-def write_mels(model, inputs, output_dir):
+def write_mels(model, inputs, output_dir, original_indices=None):
     t0 = perf_counter()
     mels, mel_lengths = model.run(None, inputs)
     infer_secs = perf_counter() - t0
@@ -73,7 +122,8 @@ def write_mels(model, inputs, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     for i, mel in enumerate(mels):
-        output_stem = output_dir.joinpath(f"output_{i + 1}")
+        out_idx = original_indices[i] if original_indices is not None else i
+        output_stem = output_dir.joinpath(f"output_{out_idx + 1}")
         plot_spectrogram_to_numpy(mel.squeeze(), output_stem.with_suffix(".png"))
         np.save(output_stem.with_suffix(".numpy"), mel)
 
@@ -131,14 +181,23 @@ def main():
         default=None,
         help="Text cleaners to use (default: auto-selected based on --language)",
     )
+    parser.add_argument(
+        "--quantized",
+        action="store_true",
+        help="Load INT8 quantized model (*_int8.onnx) produced by export --quantize",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Number of threads for ONNX Runtime (default: auto based on CPU count)",
+    )
 
     args = parser.parse_args()
     args = validate_args(args)
 
-    sess_options = ort.SessionOptions()
-    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    sess_options.intra_op_num_threads = 4
-    sess_options.inter_op_num_threads = 4
+    model_path = resolve_model_path(args.model, args.quantized)
+    sess_options = create_session_options(num_threads=args.threads)
 
     if args.gpu and args.tensorrt:
         providers = [
@@ -152,7 +211,7 @@ def main():
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
     else:
         providers = ["CPUExecutionProvider"]
-    model = ort.InferenceSession(args.model, sess_options=sess_options, providers=providers)
+    model = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
 
     model_inputs = model.get_inputs()
     model_outputs = list(model.get_outputs())
@@ -163,12 +222,26 @@ def main():
         with open(args.file, encoding="utf-8") as file:
             text_lines = file.read().splitlines()
 
-    processed_lines = [process_text(0, line, "cpu", cleaners=args.cleaners, language=args.language) for line in text_lines]
-    x = [line["x"].squeeze() for line in processed_lines]
-    # Pad
+    processed_lines = [process_text(i, line, "cpu", cleaners=args.cleaners, language=args.language) for i, line in enumerate(text_lines)]
+
+    # Sort by sequence length to minimise padding waste (matches cli.py batched_synthesis)
+    sorted_indices = sorted(range(len(processed_lines)), key=lambda k: processed_lines[k]["x"].shape[-1])
+    sorted_lines = [processed_lines[idx] for idx in sorted_indices]
+    # Build reverse mapping: sorted position -> original index
+    original_indices = [sorted_indices[i] for i in range(len(sorted_indices))]
+
+    x = [line["x"].squeeze() for line in sorted_lines]
+    # Pad (shorter sequences grouped together after sort = less wasted padding)
     x = torch.nn.utils.rnn.pad_sequence(x, batch_first=True)
     x = x.detach().cpu().numpy()
-    x_lengths = np.array([line["x_lengths"].item() for line in processed_lines], dtype=np.int64)
+    x_lengths = np.array([line["x_lengths"].item() for line in sorted_lines], dtype=np.int64)
+
+    if len(text_lines) > 1:
+        unsorted_max = max(p["x"].shape[-1] for p in processed_lines)
+        sorted_max = x.shape[1]
+        if sorted_max < unsorted_max:
+            print(f"[+] Length sorting reduced max padded length: {unsorted_max} -> {sorted_max}")
+
     inputs = {
         "x": x,
         "x_lengths": x_lengths,
@@ -184,14 +257,14 @@ def main():
 
     has_vocoder_embedded = model_outputs[0].name == "wav"
     if has_vocoder_embedded:
-        write_wavs(model, inputs, args.output_dir)
+        write_wavs(model, inputs, args.output_dir, original_indices=original_indices)
     elif args.vocoder:
         external_vocoder = ort.InferenceSession(args.vocoder, sess_options=sess_options, providers=providers)
-        write_wavs(model, inputs, args.output_dir, external_vocoder=external_vocoder)
+        write_wavs(model, inputs, args.output_dir, original_indices=original_indices, external_vocoder=external_vocoder)
     else:
         warn = "[!] A vocoder is not embedded in the graph nor an external vocoder is provided. The mel output will be written as numpy arrays to `*.npy` files in the output directory"
         warnings.warn(warn, UserWarning)
-        write_mels(model, inputs, args.output_dir)
+        write_mels(model, inputs, args.output_dir, original_indices=original_indices)
 
 
 if __name__ == "__main__":

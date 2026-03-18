@@ -42,15 +42,34 @@ def VOCODER_LOC(x):
     return LOCATION / f"{x}"
 
 
-def _warmup_model(m, dev):
-    """Run a warmup pass to trigger CUDA kernel caching."""
+def _warmup_model(m, dev, n_timesteps=10):
+    """Run a warmup pass to trigger CUDA kernel caching and torch.compile tracing.
+
+    Uses realistic input shapes and the actual n_timesteps value to ensure
+    compiled graphs cover the shapes used during real inference.
+    """
     if dev.type == "cuda":
         print("[+] Running GPU warmup...")
+        # Use a realistic phoneme sequence length (~50 tokens after intersperse)
+        # to trigger compilation/caching for shapes close to real inference.
+        seq_len = 50
         with torch.inference_mode():
-            dummy_x = torch.zeros(1, 10, dtype=torch.long, device=dev)
-            dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=dev)
-            m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2)
+            dummy_x = torch.randint(0, 178, (1, seq_len), dtype=torch.long, device=dev)
+            dummy_x_lengths = torch.tensor([seq_len], dtype=torch.long, device=dev)
+            output = m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=n_timesteps)
+        torch.cuda.synchronize()
         print("[+] Warmup complete.")
+
+
+def _compile_models(m, v, dev):
+    """Apply torch.compile to performance-critical model components on CUDA."""
+    if dev.type == "cuda":
+        print("[+] Compiling model components with torch.compile...")
+        m.encoder = torch.compile(m.encoder, mode="reduce-overhead")
+        m.decoder.estimator = torch.compile(m.decoder.estimator, mode="reduce-overhead")
+        v = torch.compile(v, mode="reduce-overhead")
+        print("[+] Compilation complete.")
+    return m, v
 
 
 def load_model(model_name, vocoder_name):
@@ -61,6 +80,7 @@ def load_model(model_name, vocoder_name):
 
     m = load_matcha(model_name, MATCHA_TTS_LOC(model_name), device)
     v, d = load_vocoder(vocoder_name, VOCODER_LOC(vocoder_name), device)
+    m, v = _compile_models(m, v, device)
     _warmup_model(m, device)
     _model_cache[cache_key] = (m, v, d)
     return m, v, d

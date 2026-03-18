@@ -2,6 +2,7 @@ import argparse
 import datetime as dt
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -283,7 +284,7 @@ def cli():
     parser.add_argument(
         "--compile",
         action="store_true",
-        help="Use torch.compile on the vocoder for faster inference (requires GPU, default: False)",
+        help="Use aggressive 'max-autotune' compilation mode instead of default 'reduce-overhead' (CUDA only)",
     )
 
     args = parser.parse_args()
@@ -300,10 +301,13 @@ def cli():
     model = load_matcha(args.model, paths["matcha"], device)
     vocoder, denoiser = load_vocoder(args.vocoder, paths["vocoder"], device)
 
-    # Optionally compile vocoder for faster inference
-    if args.compile and device.type == "cuda":
-        print("[+] Compiling vocoder with torch.compile...")
-        vocoder = torch.compile(vocoder, mode="default")
+    # Compile model and vocoder for faster inference on CUDA
+    if device.type == "cuda":
+        compile_mode = "max-autotune" if args.compile else "reduce-overhead"
+        print(f"[+] Compiling model and vocoder with torch.compile (mode={compile_mode})...")
+        model.encoder = torch.compile(model.encoder, mode=compile_mode)
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+        vocoder = torch.compile(vocoder, mode=compile_mode)
 
     # GPU warmup to trigger CUDA kernel caching
     if device.type == "cuda":
@@ -364,7 +368,15 @@ def batched_collate_fn(batch):
 def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
-    processed_text = [process_text(i, text, "cpu", cleaners=args.cleaners, language=args.language) for i, text in enumerate(texts)]
+    with ThreadPoolExecutor(max_workers=min(8, len(texts))) as executor:
+        processed_text = list(executor.map(
+            process_text,
+            range(len(texts)),
+            texts,
+            ["cpu"] * len(texts),
+            [args.cleaners] * len(texts),
+            [args.language] * len(texts),
+        ))
 
     # Sort by sequence length to reduce padding waste, track original indices
     sorted_indices = sorted(range(len(processed_text)), key=lambda k: processed_text[k]["x"].shape[-1])

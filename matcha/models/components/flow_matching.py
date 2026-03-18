@@ -29,6 +29,8 @@ class BASECFM(torch.nn.Module, ABC):
         else:
             self.sigma_min = 1e-4
 
+        self.one_minus_sigma_min = 1 - self.sigma_min
+
         self.estimator = None
 
     @torch.inference_mode()
@@ -73,20 +75,15 @@ class BASECFM(torch.nn.Module, ABC):
         """
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
 
-        # I am storing this because I can later plot it by putting a debugger here and saving it to a file
-        # Or in future might add like a return_all_steps flag
-        sol = []
-
         for step in range(1, len(t_span)):
             dphi_dt = self.estimator(x, mask, mu, t, spks, cond)
 
             x = x + dt * dphi_dt
             t = t + dt
-            sol.append(x)
             if step < len(t_span) - 1:
                 dt = t_span[step + 1] - t
 
-        return sol[-1]
+        return x
 
     def solve_midpoint(self, x, t_span, mu, mask, spks, cond):
         """
@@ -106,19 +103,16 @@ class BASECFM(torch.nn.Module, ABC):
         """
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
 
-        sol = []
-
         for step in range(1, len(t_span)):
             k1 = self.estimator(x, mask, mu, t, spks, cond)
             x_mid = x + 0.5 * dt * k1
             k2 = self.estimator(x_mid, mask, mu, t + 0.5 * dt, spks, cond)
             x = x + dt * k2
             t = t + dt
-            sol.append(x)
             if step < len(t_span) - 1:
                 dt = t_span[step + 1] - t
 
-        return sol[-1]
+        return x
 
     def compute_loss(self, x1, mask, mu, spks=None, cond=None):
         """Computes diffusion loss
@@ -138,15 +132,15 @@ class BASECFM(torch.nn.Module, ABC):
             y: conditional flow
                 shape: (batch_size, n_feats, mel_timesteps)
         """
-        b, _, t = mu.shape
+        b, _, t_len = mu.shape
 
-        # random timestep — generate in float32 for numerical stability, then cast
-        t = torch.rand([b, 1, 1], device=mu.device, dtype=torch.float32).to(mu.dtype)
+        # random timestep
+        t = torch.rand([b, 1, 1], device=mu.device, dtype=mu.dtype)
         # sample noise p(x_0) — ensure dtype matches mu
         z = torch.randn_like(x1, dtype=mu.dtype)
 
-        y = (1 - (1 - self.sigma_min) * t) * z + t * x1
-        u = x1 - (1 - self.sigma_min) * z
+        y = (1 - self.one_minus_sigma_min * t) * z + t * x1
+        u = x1 - self.one_minus_sigma_min * z
 
         loss = F.mse_loss(self.estimator(y, mask, mu, t.squeeze(), spks), u, reduction="sum") / (
             torch.sum(mask) * u.shape[1]

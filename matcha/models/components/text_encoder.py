@@ -268,7 +268,7 @@ class MultiHeadAttention(nn.Module):
             )
             p_attn = None
 
-        output = output.transpose(2, 3).contiguous().view(b, d, t_t)
+        output = output.transpose(2, 3).reshape(b, d, t_t)
         return output, p_attn
 
     @staticmethod
@@ -426,7 +426,7 @@ class TextEncoder(nn.Module):
 
         x = self.prenet(x, x_mask)
         if self.n_spks > 1:
-            x = torch.cat([x, spks.unsqueeze(-1).repeat(1, 1, x.shape[-1])], dim=1)
+            x = torch.cat([x, spks.unsqueeze(-1).expand(-1, -1, x.shape[-1])], dim=1)
         x = self.encoder(x, x_mask)
         mu = self.proj_m(x) * x_mask
 

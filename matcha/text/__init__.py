@@ -56,7 +56,7 @@ def text_to_sequence(text, cleaner_names, *, language="en"):
     else:
         for symbol in clean_text:
             symbol_id = _symbol_to_id[symbol]
-            sequence += [symbol_id]
+            sequence.append(symbol_id)
 
     return sequence, clean_text
 

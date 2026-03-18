@@ -19,6 +19,8 @@ from matcha.utils.model import (
 
 log = utils.get_pylogger(__name__)
 
+LOG_2PI = math.log(2 * math.pi)
+
 
 class MatchaTTS(BaseLightningClass):  # 🍵
     def __init__(
@@ -187,7 +189,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
             with torch.no_grad():
-                const = -0.5 * math.log(2 * math.pi) * self.n_feats
+                const = -0.5 * LOG_2PI * self.n_feats
                 y_square = -0.5 * torch.sum(y**2, 1, keepdim=True)
                 y_mu_double = torch.matmul(mu_x.transpose(1, 2), y)
                 mu_square = -0.5 * torch.sum(mu_x**2, 1).unsqueeze(-1)
@@ -212,18 +214,17 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 dtype=torch.long,
                 device=y_lengths.device,
             )
-            attn_cut = torch.zeros(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
-            y_cut = torch.zeros(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
+            attn_cut = torch.empty(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
+            y_cut = torch.empty(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
 
-            y_cut_lengths = []
+            batch_size = attn.shape[0]
+            y_cut_lengths = torch.empty(batch_size, dtype=torch.long, device=y_lengths.device)
             for i, (y_, out_offset_) in enumerate(zip(y, out_offset)):
                 y_cut_length = out_size + (y_lengths[i] - out_size).clamp(None, 0)
-                y_cut_lengths.append(y_cut_length)
+                y_cut_lengths[i] = y_cut_length
                 cut_lower, cut_upper = out_offset_, out_offset_ + y_cut_length
                 y_cut[i, :, :y_cut_length] = y_[:, cut_lower:cut_upper]
                 attn_cut[i, :, :y_cut_length] = attn[i, :, cut_lower:cut_upper]
-
-            y_cut_lengths = torch.tensor(y_cut_lengths, dtype=torch.long, device=y_lengths.device)
             y_cut_mask = sequence_mask(y_cut_lengths).unsqueeze(1).to(y_mask)
 
             attn = attn_cut
@@ -238,7 +239,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=cond)
 
         if self.prior_loss:
-            prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
+            prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + LOG_2PI) * y_mask)
             prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
         else:
             prior_loss = 0
