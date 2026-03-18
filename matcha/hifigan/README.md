@@ -1,101 +1,101 @@
-# HiFi-GAN: Generative Adversarial Networks for Efficient and High Fidelity Speech Synthesis
+# HiFi-GAN: 効率的かつ高忠実度な音声合成のための敵対的生成ネットワーク
 
 ### Jungil Kong, Jaehyeon Kim, Jaekyoung Bae
 
-In our [paper](https://arxiv.org/abs/2010.05646),
-we proposed HiFi-GAN: a GAN-based model capable of generating high fidelity speech efficiently.<br/>
-We provide our implementation and pretrained models as open source in this repository.
+私たちの[論文](https://arxiv.org/abs/2010.05646)では、
+高忠実度な音声を効率的に生成できるGANベースのモデルであるHiFi-GANを提案しました。<br/>
+本リポジトリでは、実装および学習済みモデルをオープンソースとして公開しています。
 
-**Abstract :**
-Several recent work on speech synthesis have employed generative adversarial networks (GANs) to produce raw waveforms.
-Although such methods improve the sampling efficiency and memory usage,
-their sample quality has not yet reached that of autoregressive and flow-based generative models.
-In this work, we propose HiFi-GAN, which achieves both efficient and high-fidelity speech synthesis.
-As speech audio consists of sinusoidal signals with various periods,
-we demonstrate that modeling periodic patterns of an audio is crucial for enhancing sample quality.
-A subjective human evaluation (mean opinion score, MOS) of a single speaker dataset indicates that our proposed method
-demonstrates similarity to human quality while generating 22.05 kHz high-fidelity audio 167.9 times faster than
-real-time on a single V100 GPU. We further show the generality of HiFi-GAN to the mel-spectrogram inversion of unseen
-speakers and end-to-end speech synthesis. Finally, a small footprint version of HiFi-GAN generates samples 13.4 times
-faster than real-time on CPU with comparable quality to an autoregressive counterpart.
+**概要：**
+音声合成に関する最近のいくつかの研究では、生の波形を生成するために敵対的生成ネットワーク（GAN）が採用されています。
+これらの手法はサンプリング効率やメモリ使用量を改善するものの、
+サンプル品質は自己回帰モデルやフローベースの生成モデルにはまだ及んでいません。
+本研究では、効率的かつ高忠実度な音声合成を両立するHiFi-GANを提案します。
+音声信号はさまざまな周期を持つ正弦波信号で構成されているため、
+音声の周期的パターンのモデリングがサンプル品質の向上に不可欠であることを示します。
+単一話者データセットに対する主観的人間評価（平均オピニオンスコア、MOS）では、提案手法が
+単一のV100 GPU上でリアルタイムの167.9倍の速度で22.05 kHzの高忠実度音声を生成しながら、
+人間の品質に匹敵する類似性を示すことが確認されました。さらに、未知の話者のメルスペクトログラム反転や
+エンドツーエンド音声合成におけるHiFi-GANの汎用性を示します。最後に、HiFi-GANの小規模版は
+CPU上でリアルタイムの13.4倍の速度でサンプルを生成し、自己回帰モデルに匹敵する品質を実現します。
 
-Visit our [demo website](https://jik876.github.io/hifi-gan-demo/) for audio samples.
+音声サンプルは[デモウェブサイト](https://jik876.github.io/hifi-gan-demo/)をご覧ください。
 
-## Pre-requisites
+## 前提条件
 
 1. Python >= 3.6
-2. Clone this repository.
-3. Install python requirements. Please refer [requirements.txt](requirements.txt)
-4. Download and extract the [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/).
-   And move all wav files to `LJSpeech-1.1/wavs`
+2. 本リポジトリをクローンしてください。
+3. Pythonの依存パッケージをインストールしてください。[requirements.txt](requirements.txt)を参照してください。
+4. [LJ Speechデータセット](https://keithito.com/LJ-Speech-Dataset/)をダウンロードして展開してください。
+   すべてのwavファイルを`LJSpeech-1.1/wavs`に移動してください。
 
-## Training
+## 学習
 
 ```
 python train.py --config config_v1.json
 ```
 
-To train V2 or V3 Generator, replace `config_v1.json` with `config_v2.json` or `config_v3.json`.<br>
-Checkpoints and copy of the configuration file are saved in `cp_hifigan` directory by default.<br>
-You can change the path by adding `--checkpoint_path` option.
+V2またはV3のGeneratorを学習する場合は、`config_v1.json`を`config_v2.json`または`config_v3.json`に置き換えてください。<br>
+チェックポイントと設定ファイルのコピーは、デフォルトで`cp_hifigan`ディレクトリに保存されます。<br>
+`--checkpoint_path`オプションを追加することでパスを変更できます。
 
-Validation loss during training with V1 generator.<br>
-![validation loss](./validation_loss.png)
+V1 Generatorでの学習中の検証損失。<br>
+![検証損失](./validation_loss.png)
 
-## Pretrained Model
+## 学習済みモデル
 
-You can also use pretrained models we provide.<br/>
-[Download pretrained models](https://drive.google.com/drive/folders/1-eEYTB5Av9jNql0WGBlRoi-WH2J7bp5Y?usp=sharing)<br/>
-Details of each folder are as in follows:
+私たちが提供する学習済みモデルもご利用いただけます。<br/>
+[学習済みモデルのダウンロード](https://drive.google.com/drive/folders/1-eEYTB5Av9jNql0WGBlRoi-WH2J7bp5Y?usp=sharing)<br/>
+各フォルダの詳細は以下の通りです：
 
-| Folder Name  | Generator | Dataset   | Fine-Tuned                                             |
-| ------------ | --------- | --------- | ------------------------------------------------------ |
-| LJ_V1        | V1        | LJSpeech  | No                                                     |
-| LJ_V2        | V2        | LJSpeech  | No                                                     |
-| LJ_V3        | V3        | LJSpeech  | No                                                     |
-| LJ_FT_T2_V1  | V1        | LJSpeech  | Yes ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
-| LJ_FT_T2_V2  | V2        | LJSpeech  | Yes ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
-| LJ_FT_T2_V3  | V3        | LJSpeech  | Yes ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
-| VCTK_V1      | V1        | VCTK      | No                                                     |
-| VCTK_V2      | V2        | VCTK      | No                                                     |
-| VCTK_V3      | V3        | VCTK      | No                                                     |
-| UNIVERSAL_V1 | V1        | Universal | No                                                     |
+| フォルダ名    | Generator | データセット | ファインチューニング                                    |
+| ------------ | --------- | ----------- | ------------------------------------------------------ |
+| LJ_V1        | V1        | LJSpeech    | なし                                                   |
+| LJ_V2        | V2        | LJSpeech    | なし                                                   |
+| LJ_V3        | V3        | LJSpeech    | なし                                                   |
+| LJ_FT_T2_V1  | V1        | LJSpeech    | あり ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
+| LJ_FT_T2_V2  | V2        | LJSpeech    | あり ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
+| LJ_FT_T2_V3  | V3        | LJSpeech    | あり ([Tacotron2](https://github.com/NVIDIA/tacotron2)) |
+| VCTK_V1      | V1        | VCTK        | なし                                                   |
+| VCTK_V2      | V2        | VCTK        | なし                                                   |
+| VCTK_V3      | V3        | VCTK        | なし                                                   |
+| UNIVERSAL_V1 | V1        | Universal   | なし                                                   |
 
-We provide the universal model with discriminator weights that can be used as a base for transfer learning to other datasets.
+他のデータセットへの転移学習のベースとして使用できるDiscriminator重み付きのユニバーサルモデルを提供しています。
 
-## Fine-Tuning
+## ファインチューニング
 
-1. Generate mel-spectrograms in numpy format using [Tacotron2](https://github.com/NVIDIA/tacotron2) with teacher-forcing.<br/>
-   The file name of the generated mel-spectrogram should match the audio file and the extension should be `.npy`.<br/>
-   Example:
+1. [Tacotron2](https://github.com/NVIDIA/tacotron2)を使用して、Teacher-Forcingによりnumpy形式のメルスペクトログラムを生成します。<br/>
+   生成されたメルスペクトログラムのファイル名は音声ファイルと一致し、拡張子は`.npy`である必要があります。<br/>
+   例：
    `   Audio File : LJ001-0001.wav
 Mel-Spectrogram File : LJ001-0001.npy`
-2. Create `ft_dataset` folder and copy the generated mel-spectrogram files into it.<br/>
-3. Run the following command.
+2. `ft_dataset`フォルダを作成し、生成されたメルスペクトログラムファイルをコピーします。<br/>
+3. 以下のコマンドを実行します。
    ```
    python train.py --fine_tuning True --config config_v1.json
    ```
-   For other command line options, please refer to the training section.
+   その他のコマンドラインオプションについては、学習セクションを参照してください。
 
-## Inference from wav file
+## wavファイルからの推論
 
-1. Make `test_files` directory and copy wav files into the directory.
-2. Run the following command.
-   `   python inference.py --checkpoint_file [generator checkpoint file path]`
-   Generated wav files are saved in `generated_files` by default.<br>
-   You can change the path by adding `--output_dir` option.
+1. `test_files`ディレクトリを作成し、wavファイルをそのディレクトリにコピーします。
+2. 以下のコマンドを実行します。
+   `   python inference.py --checkpoint_file [generatorチェックポイントファイルのパス]`
+   生成されたwavファイルはデフォルトで`generated_files`に保存されます。<br>
+   `--output_dir`オプションを追加することでパスを変更できます。
 
-## Inference for end-to-end speech synthesis
+## エンドツーエンド音声合成の推論
 
-1. Make `test_mel_files` directory and copy generated mel-spectrogram files into the directory.<br>
-   You can generate mel-spectrograms using [Tacotron2](https://github.com/NVIDIA/tacotron2),
-   [Glow-TTS](https://github.com/jaywalnut310/glow-tts) and so forth.
-2. Run the following command.
-   `   python inference_e2e.py --checkpoint_file [generator checkpoint file path]`
-   Generated wav files are saved in `generated_files_from_mel` by default.<br>
-   You can change the path by adding `--output_dir` option.
+1. `test_mel_files`ディレクトリを作成し、生成されたメルスペクトログラムファイルをそのディレクトリにコピーします。<br>
+   メルスペクトログラムは[Tacotron2](https://github.com/NVIDIA/tacotron2)、
+   [Glow-TTS](https://github.com/jaywalnut310/glow-tts)などを使用して生成できます。
+2. 以下のコマンドを実行します。
+   `   python inference_e2e.py --checkpoint_file [generatorチェックポイントファイルのパス]`
+   生成されたwavファイルはデフォルトで`generated_files_from_mel`に保存されます。<br>
+   `--output_dir`オプションを追加することでパスを変更できます。
 
-## Acknowledgements
+## 謝辞
 
-We referred to [WaveGlow](https://github.com/NVIDIA/waveglow), [MelGAN](https://github.com/descriptinc/melgan-neurips)
-and [Tacotron2](https://github.com/NVIDIA/tacotron2) to implement this.
+本実装にあたり、[WaveGlow](https://github.com/NVIDIA/waveglow)、[MelGAN](https://github.com/descriptinc/melgan-neurips)、
+および[Tacotron2](https://github.com/NVIDIA/tacotron2)を参考にしました。

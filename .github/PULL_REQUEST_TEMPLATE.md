@@ -1,22 +1,22 @@
-## What does this PR do?
+## このPRは何をしますか？
 
 <!--
-Please include a summary of the change and which issue is fixed.
-Please also include relevant motivation and context.
-List any dependencies that are required for this change.
-List all the breaking changes introduced by this pull request.
+変更内容の概要と、どのIssueが修正されるかを記載してください。
+関連する動機やコンテキストも含めてください。
+この変更に必要な依存関係があれば一覧にしてください。
+このプルリクエストで導入されるすべての破壊的変更を一覧にしてください。
 -->
 
 Fixes #\<issue_number>
 
-## Before submitting
+## 提出前の確認事項
 
-- [ ] Did you make sure **title is self-explanatory** and **the description concisely explains the PR**?
-- [ ] Did you make sure your **PR does only one thing**, instead of bundling different changes together?
-- [ ] Did you list all the **breaking changes** introduced by this pull request?
-- [ ] Did you **test your PR locally** with `pytest` command?
-- [ ] Did you **run pre-commit hooks** with `pre-commit run -a` command?
+- [ ] **タイトルが分かりやすく**、**説明がPRの内容を簡潔に説明している**ことを確認しましたか？
+- [ ] **PRが一つのことだけを行っている**ことを確認しましたか？異なる変更をまとめていませんか？
+- [ ] このプルリクエストで導入されるすべての**破壊的変更**を一覧にしましたか？
+- [ ] `pytest` コマンドで**PRをローカルでテスト**しましたか？
+- [ ] `pre-commit run -a` コマンドで**pre-commitフックを実行**しましたか？
 
-## Did you have fun?
+## 楽しめましたか？
 
-Make sure you had fun coding 🙃
+コーディングを楽しめたか確認してください 🙃
