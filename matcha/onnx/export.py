@@ -124,9 +124,9 @@ def main():
     matcha = load_matcha(checkpoint_path.stem, checkpoint_path, "cpu")
 
     if args.vocoder_name or args.vocoder_checkpoint_path:
-        assert (
-            args.vocoder_name and args.vocoder_checkpoint_path
-        ), "Both vocoder_name and vocoder-checkpoint are required when embedding the vocoder in the ONNX graph."
+        assert args.vocoder_name and args.vocoder_checkpoint_path, (
+            "Both vocoder_name and vocoder-checkpoint are required when embedding the vocoder in the ONNX graph."
+        )
         vocoder, _ = load_vocoder(args.vocoder_name, args.vocoder_checkpoint_path, "cpu")
     else:
         vocoder = None

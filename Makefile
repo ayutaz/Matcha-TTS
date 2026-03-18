@@ -17,7 +17,19 @@ create-package: ## Create wheel and tar gz
 	rm -rf dist/
 	uv build
 
-format: ## Run pre-commit hooks
+lint: ## Run ruff linter
+	uv run ruff check .
+
+lint-fix: ## Run ruff linter with auto-fix
+	uv run ruff check --fix .
+
+format: ## Run ruff formatter
+	uv run ruff format .
+
+format-check: ## Check formatting without changes
+	uv run ruff format --check .
+
+pre-commit: ## Run all pre-commit hooks
 	uv run pre-commit run -a
 
 sync: ## Sync project dependencies

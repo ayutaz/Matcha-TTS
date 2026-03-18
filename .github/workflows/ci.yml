@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Verify uv.lock is in sync
+        run: uv lock --check
+
+      - name: Build package
+        run: uv build
+
+  lint:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Run ruff linter
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Export requirements
+        run: uv export --format requirements-txt --no-hashes > requirements-audit.txt
+
+      - name: Audit dependencies
+        run: uvx pip-audit -r requirements-audit.txt --progress-spinner off
+        continue-on-error: true
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y espeak-ng
+
+      - name: Install project dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Run tests
+        env:
+          PHONEMIZER_ESPEAK_LIBRARY: /usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+        run: uv run pytest -k "not slow" --tb=short -q --cov=matcha --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false

@@ -13,9 +13,9 @@ from matcha.cli import plot_spectrogram_to_numpy, process_text
 
 
 def validate_args(args):
-    assert (
-        args.text or args.file
-    ), "Either text or file must be provided Matcha-T(ea)TTS need sometext to whisk the waveforms."
+    assert args.text or args.file, (
+        "Either text or file must be provided Matcha-T(ea)TTS need sometext to whisk the waveforms."
+    )
     assert args.temperature >= 0, "Sampling temperature cannot be negative"
     assert args.speaking_rate >= 0, "Speaking rate must be greater than 0"
     return args

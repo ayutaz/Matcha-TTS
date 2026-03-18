@@ -132,9 +132,9 @@ def save_to_folder(filename: str, output: dict, folder: str):
 
 
 def validate_args(args):
-    assert (
-        args.text or args.file
-    ), "Either text or file must be provided Matcha-T(ea)TTS need sometext to whisk the waveforms."
+    assert args.text or args.file, (
+        "Either text or file must be provided Matcha-T(ea)TTS need sometext to whisk the waveforms."
+    )
     assert args.temperature >= 0, "Sampling temperature cannot be negative"
     assert args.steps > 0, "Number of ODE steps must be greater than 0"
 
@@ -173,9 +173,9 @@ def validate_args_for_multispeaker_model(args):
 
     spk_range = MULTISPEAKER_MODEL[args.model]["spk_range"]
     if args.spk is not None:
-        assert (
-            args.spk >= spk_range[0] and args.spk <= spk_range[-1]
-        ), f"Speaker ID must be between {spk_range} for this model."
+        assert args.spk >= spk_range[0] and args.spk <= spk_range[-1], (
+            f"Speaker ID must be between {spk_range} for this model."
+        )
     else:
         available_spk_id = MULTISPEAKER_MODEL[args.model]["spk"]
         warn_ = f"[!] Speaker ID not provided! Using speaker ID {available_spk_id}"
