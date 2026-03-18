@@ -1,5 +1,7 @@
 """from https://github.com/keithito/tacotron"""
 
+from functools import lru_cache
+
 from matcha.text import cleaners
 from matcha.text.symbols import symbols, symbols_ja
 
@@ -29,6 +31,12 @@ class UnknownCleanerException(Exception):
     pass
 
 
+@lru_cache(maxsize=16384)
+def _cached_clean_text(text, cleaners_tuple, language):
+    """Cached version of text cleaning for repeated texts."""
+    return _clean_text(text, list(cleaners_tuple))
+
+
 def text_to_sequence(text, cleaner_names, *, language="en"):
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
     Args:
@@ -39,7 +47,7 @@ def text_to_sequence(text, cleaner_names, *, language="en"):
       List of integers corresponding to the symbols in the text
     """
     sequence = []
-    clean_text = _clean_text(text, cleaner_names)
+    clean_text = _cached_clean_text(text, tuple(cleaner_names), language)
 
     if language == "ja":
         sym2id, _ = _get_symbol_map("ja")

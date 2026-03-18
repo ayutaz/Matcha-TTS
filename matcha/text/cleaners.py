@@ -14,23 +14,27 @@ hyperparameter. Some cleaners are English-specific. You'll typically want to use
 import logging
 import re
 
-import phonemizer
 from unidecode import unidecode
 
-# To avoid excessive logging we set the log level of the phonemizer package to Critical
-critical_logger = logging.getLogger("phonemizer")
-critical_logger.setLevel(logging.CRITICAL)
+# Lazy-initialized espeak phonemizer (only created when english_cleaners2 is called)
+_global_phonemizer = None
 
-# Intializing the phonemizer globally significantly reduces the speed
-# now the phonemizer is not initialising at every call
-# Might be less flexible, but it is much-much faster
-global_phonemizer = phonemizer.backend.EspeakBackend(
-    language="en-us",
-    preserve_punctuation=True,
-    with_stress=True,
-    language_switch="remove-flags",
-    logger=critical_logger,
-)
+
+def _get_phonemizer():
+    global _global_phonemizer
+    if _global_phonemizer is None:
+        import phonemizer
+
+        critical_logger = logging.getLogger("phonemizer")
+        critical_logger.setLevel(logging.CRITICAL)
+        _global_phonemizer = phonemizer.backend.EspeakBackend(
+            language="en-us",
+            preserve_punctuation=True,
+            with_stress=True,
+            language_switch="remove-flags",
+            logger=critical_logger,
+        )
+    return _global_phonemizer
 
 
 # Regular expression matching whitespace:
@@ -107,7 +111,7 @@ def english_cleaners2(text):
     text = convert_to_ascii(text)
     text = lowercase(text)
     text = expand_abbreviations(text)
-    phonemes = global_phonemizer.phonemize([text], strip=True, njobs=1)[0]
+    phonemes = _get_phonemizer().phonemize([text], strip=True, njobs=1)[0]
     # Added in some cases espeak is not removing brackets
     phonemes = remove_brackets(phonemes)
     phonemes = collapse_whitespace(phonemes)
@@ -184,12 +188,19 @@ def _fullcontext_to_prosody(labels):
             continue
 
         # Extract accent features
-        a1 = int(_A1_RE.search(label).group(1))  # mora position in accent phrase
-        a2 = int(_A2_RE.search(label).group(1))  # accent nucleus position
-        f1 = int(_F1_RE.search(label).group(1))  # mora count in accent phrase
+        a1_m = _A1_RE.search(label)
+        a2_m = _A2_RE.search(label)
+        f1_m = _F1_RE.search(label)
+        if a1_m is None or a2_m is None or f1_m is None:
+            phonemes.append(ph)
+            continue
+        a1 = int(a1_m.group(1))  # mora position in accent phrase
+        a2 = int(a2_m.group(1))  # accent nucleus position
+        f1 = int(f1_m.group(1))  # mora count in accent phrase
 
         # Accent phrase boundary
-        a2_next = int(_A2_RE.search(labels[i + 1]).group(1)) if i + 1 < len(labels) else -1
+        a2_next_m = _A2_RE.search(labels[i + 1]) if i + 1 < len(labels) else None
+        a2_next = int(a2_next_m.group(1)) if a2_next_m is not None else -1
         if a1 == 1 and a2_next == 1:
             phonemes.append("#")
 

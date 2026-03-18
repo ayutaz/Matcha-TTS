@@ -23,11 +23,11 @@ _pad_ja = "~"
 _extra_symbols_ja = ["^", "$", "?", "_", "#", "[", "]"]  # 韻律記号 (7)
 _phonemes_ja = [
     "A", "E", "I", "N", "O", "U",                          # 無声化母音+撥音 (6)
-    "a", "b", "by", "ch", "cl", "d", "dy", "e", "f",      # (9)
-    "g", "gy", "h", "hy", "i", "j", "k", "ky",            # (8)
+    "a", "b", "by", "ch", "cl", "d", "dy", "e", "f", "fy",  # (10)
+    "g", "gw", "gy", "h", "hy", "i", "j", "k", "kw", "ky",  # (10)
     "m", "my", "n", "ny", "o", "p", "py",                  # (7)
     "r", "ry", "s", "sh", "t", "ts", "ty",                 # (7)
     "u", "v", "w", "y", "z",                               # (5)
     "pau", "sil",                                           # (2)
-]  # 44音素
-symbols_ja = [_pad_ja] + _extra_symbols_ja + _phonemes_ja  # 52
+]  # 47音素
+symbols_ja = [_pad_ja] + _extra_symbols_ja + _phonemes_ja  # 55

@@ -168,6 +168,8 @@ class BaseLightningClass(LightningModule, ABC):
 
     def on_validation_end(self) -> None:
         if self.trainer.is_global_zero:
+            if self.current_epoch % 10 != 0:
+                return
             one_batch = next(iter(self.trainer.val_dataloaders))
             if self.current_epoch == 0:
                 log.debug("Plotting original samples")
@@ -208,4 +210,5 @@ class BaseLightningClass(LightningModule, ABC):
                 )
 
     def on_before_optimizer_step(self, optimizer):
-        self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})
+        if self.global_step % 100 == 0:
+            self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})

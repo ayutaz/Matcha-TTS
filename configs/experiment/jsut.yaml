@@ -11,4 +11,4 @@ tags: ["jsut", "japanese"]
 run_name: jsut
 
 model:
-  n_vocab: 52
+  n_vocab: 55

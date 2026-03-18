@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+import torch
 import hydra
 import lightning as L
 import rootutils
@@ -31,6 +32,17 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 log = utils.get_pylogger(__name__)
 
 
+def setup_cuda_optimizations():
+    """Enable CUDA optimizations for faster training."""
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+    log.info(
+        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s",
+        torch.backends.cudnn.benchmark,
+        torch.backends.cudnn.deterministic,
+    )
+
+
 @utils.task_wrapper
 def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
@@ -51,6 +63,11 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     log.info(f"Instantiating model <{cfg.model._target_}>")  # pylint: disable=protected-access
     model: LightningModule = hydra.utils.instantiate(cfg.model)
+
+    if cfg.get("compile_model", False):
+        log.info("Compiling encoder and decoder with torch.compile...")
+        model.encoder = torch.compile(model.encoder, mode="reduce-overhead")
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode="reduce-overhead")
 
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = utils.instantiate_callbacks(cfg.get("callbacks"))
@@ -107,6 +124,9 @@ def main(cfg: DictConfig) -> float | None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     utils.extras(cfg)
+
+    # enable CUDA optimizations
+    setup_cuda_optimizations()
 
     # train the model
     metric_dict, _ = train(cfg)
