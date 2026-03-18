@@ -7,6 +7,7 @@
 defaults:
   - override /data: jvs_precomputed.yaml
   - override /trainer: ddp_optimized.yaml
+  - override /callbacks: default.yaml
 
 tags: ["jvs", "japanese", "multispeaker", "fast"]
 
@@ -15,6 +16,17 @@ run_name: jvs_fast
 model:
   n_vocab: 55
   optimizer:
-    lr: 2.5e-4
+    lr: 2e-4
 
-compile_model: true
+compile_mode: "default"
+gradient_checkpointing: true
+
+callbacks:
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "loss"
+    patience: 20
+    min_delta: 0.001
+    mode: "min"
+    check_finite: true
+    verbose: true

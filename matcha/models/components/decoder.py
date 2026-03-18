@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from conformer import ConformerBlock
 from diffusers.models.activations import get_activation
 from einops import pack, rearrange, repeat
+from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 from matcha.models.components.transformer import BasicTransformerBlock
 
@@ -212,11 +213,13 @@ class Decoder(nn.Module):
         down_block_type="transformer",
         mid_block_type="transformer",
         up_block_type="transformer",
+        use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
         channels = tuple(channels)
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         self.time_embeddings = SinusoidalPosEmb(in_channels)
         time_embed_dim = channels[0] * 4
@@ -360,6 +363,9 @@ class Decoder(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+    def enable_gradient_checkpointing(self):
+        self.use_gradient_checkpointing = True
+
     def forward(self, x, mask, mu, t, spks=None, cond=None):
         """Forward pass of the UNet1DConditional model.
 
@@ -387,19 +393,35 @@ class Decoder(nn.Module):
             spks = repeat(spks, "b c -> b c t", t=x.shape[-1])
             x = pack([x, spks], "b * t")[0]
 
+        use_ckpt = self.use_gradient_checkpointing and self.training
+
         hiddens = []
         masks = [mask]
         for resnet, transformer_blocks, downsample in self.down_blocks:
             mask_down = masks[-1]
-            x = resnet(x, mask_down, t)
+            if use_ckpt:
+                x = grad_checkpoint(resnet, x, mask_down, t, use_reentrant=False)
+            else:
+                x = resnet(x, mask_down, t)
             x = rearrange(x, "b c t -> b t c")
             mask_down = rearrange(mask_down, "b 1 t -> b t")
             for transformer_block in transformer_blocks:
-                x = transformer_block(
-                    hidden_states=x,
-                    attention_mask=mask_down,
-                    timestep=t,
-                )
+                if use_ckpt:
+                    x = grad_checkpoint(
+                        transformer_block,
+                        x,
+                        mask_down,
+                        None,
+                        None,
+                        t,
+                        use_reentrant=False,
+                    )
+                else:
+                    x = transformer_block(
+                        hidden_states=x,
+                        attention_mask=mask_down,
+                        timestep=t,
+                    )
             x = rearrange(x, "b t c -> b c t")
             mask_down = rearrange(mask_down, "b t -> b 1 t")
             hiddens.append(x)  # Save hidden states for skip connections
@@ -410,29 +432,57 @@ class Decoder(nn.Module):
         mask_mid = masks[-1]
 
         for resnet, transformer_blocks in self.mid_blocks:
-            x = resnet(x, mask_mid, t)
+            if use_ckpt:
+                x = grad_checkpoint(resnet, x, mask_mid, t, use_reentrant=False)
+            else:
+                x = resnet(x, mask_mid, t)
             x = rearrange(x, "b c t -> b t c")
             mask_mid = rearrange(mask_mid, "b 1 t -> b t")
             for transformer_block in transformer_blocks:
-                x = transformer_block(
-                    hidden_states=x,
-                    attention_mask=mask_mid,
-                    timestep=t,
-                )
+                if use_ckpt:
+                    x = grad_checkpoint(
+                        transformer_block,
+                        x,
+                        mask_mid,
+                        None,
+                        None,
+                        t,
+                        use_reentrant=False,
+                    )
+                else:
+                    x = transformer_block(
+                        hidden_states=x,
+                        attention_mask=mask_mid,
+                        timestep=t,
+                    )
             x = rearrange(x, "b t c -> b c t")
             mask_mid = rearrange(mask_mid, "b t -> b 1 t")
 
         for resnet, transformer_blocks, upsample in self.up_blocks:
             mask_up = masks.pop()
-            x = resnet(pack([x, hiddens.pop()], "b * t")[0], mask_up, t)
+            if use_ckpt:
+                x = grad_checkpoint(resnet, pack([x, hiddens.pop()], "b * t")[0], mask_up, t, use_reentrant=False)
+            else:
+                x = resnet(pack([x, hiddens.pop()], "b * t")[0], mask_up, t)
             x = rearrange(x, "b c t -> b t c")
             mask_up = rearrange(mask_up, "b 1 t -> b t")
             for transformer_block in transformer_blocks:
-                x = transformer_block(
-                    hidden_states=x,
-                    attention_mask=mask_up,
-                    timestep=t,
-                )
+                if use_ckpt:
+                    x = grad_checkpoint(
+                        transformer_block,
+                        x,
+                        mask_up,
+                        None,
+                        None,
+                        t,
+                        use_reentrant=False,
+                    )
+                else:
+                    x = transformer_block(
+                        hidden_states=x,
+                        attention_mask=mask_up,
+                        timestep=t,
+                    )
             x = rearrange(x, "b t c -> b c t")
             mask_up = rearrange(mask_up, "b t -> b 1 t")
             x = upsample(x * mask_up)

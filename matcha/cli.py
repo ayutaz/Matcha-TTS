@@ -248,7 +248,7 @@ def cli():
         default=None,
         help="change the speaking rate, a higher value means slower speaking rate (default: 1.0)",
     )
-    parser.add_argument("--steps", type=int, default=10, help="Number of ODE steps  (default: 10)")
+    parser.add_argument("--steps", type=int, default=5, help="Number of ODE steps  (default: 5)")
     parser.add_argument("--cpu", action="store_true", help="Use CPU for inference (default: use GPU if available)")
     parser.add_argument(
         "--denoiser_strength",
@@ -280,6 +280,11 @@ def cli():
         default=None,
         help="Text cleaners to use (default: auto-selected based on --language)",
     )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Use torch.compile on the vocoder for faster inference (requires GPU, default: False)",
+    )
 
     args = parser.parse_args()
 
@@ -294,6 +299,20 @@ def cli():
 
     model = load_matcha(args.model, paths["matcha"], device)
     vocoder, denoiser = load_vocoder(args.vocoder, paths["vocoder"], device)
+
+    # Optionally compile vocoder for faster inference
+    if args.compile and device.type == "cuda":
+        print("[+] Compiling vocoder with torch.compile...")
+        vocoder = torch.compile(vocoder, mode="default")
+
+    # GPU warmup to trigger CUDA kernel caching
+    if device.type == "cuda":
+        print("[+] Running GPU warmup...")
+        with torch.inference_mode():
+            dummy_x = torch.zeros(1, 10, dtype=torch.long, device=device)
+            dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=device)
+            model.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2)
+        print("[+] Warmup complete.")
 
     # Auto-detect language from model if not explicitly set
     if args.language is None:
@@ -346,12 +365,20 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
     processed_text = [process_text(i, text, "cpu", cleaners=args.cleaners, language=args.language) for i, text in enumerate(texts)]
+
+    # Sort by sequence length to reduce padding waste, track original indices
+    sorted_indices = sorted(range(len(processed_text)), key=lambda k: processed_text[k]["x"].shape[-1])
+    sorted_processed_text = [processed_text[idx] for idx in sorted_indices]
+
     dataloader = torch.utils.data.DataLoader(
-        BatchedSynthesisDataset(processed_text),
+        BatchedSynthesisDataset(sorted_processed_text),
         batch_size=args.batch_size,
         collate_fn=batched_collate_fn,
         num_workers=8,
     )
+
+    # Process batches; use global_idx to map back to original indices
+    global_idx = 0
     for i, batch in enumerate(dataloader):
         i = i + 1
         start_t = dt.datetime.now()
@@ -373,11 +400,14 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
         total_rtf.append(output["rtf"])
         total_rtf_w.append(rtf_w)
         for j in range(output["mel"].shape[0]):
-            base_name = f"utterance_{j:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{j:03d}"
             length = output["mel_lengths"][j]
             new_dict = {"mel": output["mel"][j][:, :length], "waveform": output["waveform"][j][: length * 256]}
+            # Map back to original index for naming
+            orig_idx = sorted_indices[global_idx]
+            base_name = f"utterance_{orig_idx:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{orig_idx:03d}"
             location = save_to_folder(base_name, new_dict, args.output_folder)
-            print(f"[🍵-{j}] Waveform saved: {location}")
+            print(f"[🍵-{orig_idx}] Waveform saved: {location}")
+            global_idx += 1
 
     print("".join(["="] * 100))
     print(f"[🍵] Average Matcha-TTS RTF: {np.mean(total_rtf):.4f} ± {np.std(total_rtf)}")
@@ -440,6 +470,9 @@ def get_device(args):
     if torch.cuda.is_available() and not args.cpu:
         print("[+] GPU Available! Using GPU")
         device = torch.device("cuda")
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     else:
         print("[-] GPU not available or forced CPU run! Using CPU")
         device = torch.device("cpu")

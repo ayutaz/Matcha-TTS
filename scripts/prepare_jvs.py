@@ -12,9 +12,11 @@ Steps:
 
 import argparse
 import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import torchaudio
+from tqdm import tqdm
 
 
 def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050):
@@ -26,6 +28,16 @@ def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050):
         resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
         waveform = resampler(waveform)
     torchaudio.save(str(output_path), waveform, target_sr)
+
+
+def _resample_worker(args_tuple):
+    """Worker function for parallel resampling. Accepts a tuple for pickling compatibility."""
+    src_wav, dst_wav, target_sr = args_tuple
+    try:
+        resample_audio(src_wav, dst_wav, target_sr=target_sr)
+        return str(src_wav), None
+    except Exception as e:
+        return str(src_wav), str(e)
 
 
 def parse_transcript(transcript_path):
@@ -49,6 +61,12 @@ def main():
     parser.add_argument("--val-ratio", type=float, default=0.05, help="Validation split ratio")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for train/val split")
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=8,
+        help="Number of parallel workers for resampling (default: 8)",
+    )
+    parser.add_argument(
         "--subsets",
         nargs="+",
         default=["parallel100", "nonpara30"],
@@ -71,6 +89,8 @@ def main():
     # Map speaker names to integer IDs (0-indexed)
     spk_to_id = {d.name: i for i, d in enumerate(speaker_dirs)}
 
+    # Phase 1: collect all resample tasks and filelist entries
+    resample_tasks = []  # (src_wav, dst_wav, target_sr)
     filelist = []
     skipped = 0
 
@@ -101,7 +121,7 @@ def main():
 
                 dst_wav = spk_wav_dir / f"{utt_id}.wav"
                 if not dst_wav.exists():
-                    resample_audio(src_wav, dst_wav, target_sr=args.target_sr)
+                    resample_tasks.append((str(src_wav), str(dst_wav), args.target_sr))
 
                 filelist.append(f"{dst_wav.resolve()}|{spk_id}|{text}")
 
@@ -111,6 +131,37 @@ def main():
 
     if not filelist:
         raise RuntimeError("No valid utterances found.")
+
+    # Phase 2: parallel resampling
+    resample_errors = []
+    if resample_tasks:
+        print(f"\n[*] Resampling {len(resample_tasks)} audio files with {args.num_workers} workers...")
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {
+                executor.submit(_resample_worker, task): task[0] for task in resample_tasks
+            }
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Resampling",
+                unit="files",
+            ):
+                src_path = futures[future]
+                try:
+                    wav_path, error = future.result()
+                    if error:
+                        resample_errors.append((wav_path, error))
+                        tqdm.write(f"ERROR [{wav_path}]: {error}")
+                except Exception as e:
+                    resample_errors.append((src_path, str(e)))
+                    tqdm.write(f"ERROR [{src_path}]: {e}")
+    else:
+        print("\n[*] All audio files already resampled, skipping.")
+
+    if resample_errors:
+        print(f"[!] {len(resample_errors)} resampling error(s):")
+        for path, msg in resample_errors:
+            print(f"  {path}: {msg}")
 
     print(f"\n[*] Total utterances: {len(filelist)}")
     if skipped:

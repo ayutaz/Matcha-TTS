@@ -30,6 +30,9 @@ args = Namespace(
 CURRENTLY_LOADED_MODEL = args.model
 CURRENT_LANGUAGE = "en"
 
+# Cache for loaded models: key -> (model, vocoder, denoiser)
+_model_cache = {}
+
 
 def MATCHA_TTS_LOC(x):
     return LOCATION / f"{x}.ckpt"
@@ -37,6 +40,30 @@ def MATCHA_TTS_LOC(x):
 
 def VOCODER_LOC(x):
     return LOCATION / f"{x}"
+
+
+def _warmup_model(m, dev):
+    """Run a warmup pass to trigger CUDA kernel caching."""
+    if dev.type == "cuda":
+        print("[+] Running GPU warmup...")
+        with torch.inference_mode():
+            dummy_x = torch.zeros(1, 10, dtype=torch.long, device=dev)
+            dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=dev)
+            m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2)
+        print("[+] Warmup complete.")
+
+
+def load_model(model_name, vocoder_name):
+    cache_key = (model_name, vocoder_name)
+    if cache_key in _model_cache:
+        print(f"[+] Using cached model: {model_name} + {vocoder_name}")
+        return _model_cache[cache_key]
+
+    m = load_matcha(model_name, MATCHA_TTS_LOC(model_name), device)
+    v, d = load_vocoder(vocoder_name, VOCODER_LOC(vocoder_name), device)
+    _warmup_model(m, device)
+    _model_cache[cache_key] = (m, v, d)
+    return m, v, d
 
 
 LOGO_URL = "https://shivammehta25.github.io/Matcha-TTS/images/logo.png"
@@ -66,15 +93,8 @@ assert_model_downloaded(VOCODER_LOC("hifigan_univ_v1"), VOCODER_URLS["hifigan_un
 
 device = get_device(args)
 
-# Load default model
-model = load_matcha(args.model, MATCHA_TTS_LOC(args.model), device)
-vocoder, denoiser = load_vocoder(args.vocoder, VOCODER_LOC(args.vocoder), device)
-
-
-def load_model(model_name, vocoder_name):
-    model = load_matcha(model_name, MATCHA_TTS_LOC(model_name), device)
-    vocoder, denoiser = load_vocoder(vocoder_name, VOCODER_LOC(vocoder_name), device)
-    return model, vocoder, denoiser
+# Load default model (with warmup and caching)
+model, vocoder, denoiser = load_model(args.model, args.vocoder)
 
 
 def load_model_ui(model_type, textbox):

@@ -62,8 +62,8 @@ class TestSymbolsJa:
     """Verify structural properties of the Japanese symbol table."""
 
     def test_symbol_count(self):
-        """The Japanese symbol list should contain exactly 52 entries."""
-        assert len(symbols_ja) == 52
+        """The Japanese symbol list should contain exactly 55 entries (including fy, gw, kw)."""
+        assert len(symbols_ja) == 55
 
     def test_pad_is_first(self):
         """The padding symbol '~' must be the first symbol (index 0)."""

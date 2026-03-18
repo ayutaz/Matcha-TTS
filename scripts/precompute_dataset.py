@@ -12,7 +12,8 @@ Usage:
 """
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import torch
@@ -89,6 +90,14 @@ def process_sample(
     return out_path
 
 
+def process_sample_text_only(text: str):
+    """Compute text sequence only (for GPU mel mode where mel is done in main thread)."""
+    text_norm, cleaned_text = text_to_sequence(text, ["japanese_cleaners"], language="ja")
+    text_norm = intersperse(text_norm, 0)  # add_blank=True
+    text_norm = torch.IntTensor(text_norm)
+    return text_norm, cleaned_text
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Pre-compute mel spectrograms and text sequences for JVS dataset."
@@ -123,6 +132,11 @@ def main():
         default=8,
         help="Number of parallel workers (default: 8)",
     )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use GPU for mel spectrogram computation (runs mel on main thread, text in parallel)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -134,31 +148,114 @@ def main():
     print(f"Mel normalization: mean={args.mel_mean}, std={args.mel_std}")
     print(f"Workers: {args.num_workers}")
 
+    use_gpu = args.gpu and torch.cuda.is_available()
+    if args.gpu and not torch.cuda.is_available():
+        print("WARNING: --gpu specified but CUDA is not available, falling back to CPU")
+    if use_gpu:
+        print("GPU mel computation: enabled (mel on main thread, text processing in parallel)")
+
     errors = []
+    start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-        futures = {}
-        for entry in entries:
-            wav_path, spk_str, text = entry[0], entry[1], entry[2]
-            spk = int(spk_str)
-            future = executor.submit(
-                process_sample,
-                wav_path,
-                spk,
-                text,
-                output_dir,
-                args.mel_mean,
-                args.mel_std,
-            )
-            futures[future] = wav_path
+    if use_gpu:
+        # GPU mode: compute mel on GPU in main thread, text processing in parallel
+        # This avoids issues with CUDA and multiprocessing
+        text_results = {}
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {}
+            for entry in entries:
+                wav_path, spk_str, text = entry[0], entry[1], entry[2]
+                future = executor.submit(process_sample_text_only, text)
+                futures[future] = (wav_path, int(spk_str), text)
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
-            wav_path = futures[future]
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Text processing",
+                unit="samples",
+            ):
+                wav_path, spk, text = futures[future]
+                try:
+                    text_norm, cleaned_text = future.result()
+                    text_results[wav_path] = (spk, text_norm, cleaned_text)
+                except Exception as e:
+                    errors.append((wav_path, str(e)))
+                    tqdm.write(f"ERROR [text] [{wav_path}]: {e}")
+
+        # Now compute mel spectrograms on GPU in main thread
+        for wav_path, (spk, text_norm, cleaned_text) in tqdm(
+            text_results.items(),
+            desc="GPU mel computation",
+            unit="samples",
+        ):
             try:
-                future.result()
+                wav_p = Path(wav_path)
+                spk_name = wav_p.parent.name
+                out_path = output_dir / f"{spk_name}_{wav_p.stem}.pt"
+
+                audio, sr = ta.load(wav_path)
+                assert sr == SAMPLE_RATE, f"Expected {SAMPLE_RATE} Hz, got {sr} Hz for {wav_path}"
+                audio = audio.to("cuda")
+                mel = mel_spectrogram(
+                    audio,
+                    N_FFT,
+                    N_MELS,
+                    SAMPLE_RATE,
+                    HOP_LENGTH,
+                    WIN_LENGTH,
+                    F_MIN,
+                    F_MAX,
+                    center=False,
+                ).squeeze()
+                mel = mel.cpu()
+                mel = normalize(mel, args.mel_mean, args.mel_std)
+
+                torch.save(
+                    {
+                        "mel": mel,
+                        "text": text_norm,
+                        "spk": spk,
+                        "cleaned_text": cleaned_text,
+                    },
+                    out_path,
+                )
             except Exception as e:
                 errors.append((wav_path, str(e)))
-                tqdm.write(f"ERROR [{wav_path}]: {e}")
+                tqdm.write(f"ERROR [mel] [{wav_path}]: {e}")
+    else:
+        # CPU mode: process everything in parallel with ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {}
+            for entry in entries:
+                wav_path, spk_str, text = entry[0], entry[1], entry[2]
+                spk = int(spk_str)
+                future = executor.submit(
+                    process_sample,
+                    wav_path,
+                    spk,
+                    text,
+                    output_dir,
+                    args.mel_mean,
+                    args.mel_std,
+                )
+                futures[future] = wav_path
+
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Processing",
+                unit="samples",
+            ):
+                wav_path = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    errors.append((wav_path, str(e)))
+                    tqdm.write(f"ERROR [{wav_path}]: {e}")
+
+    elapsed = time.time() - start_time
+    total_processed = len(entries) - len(errors)
+    speed = total_processed / elapsed if elapsed > 0 else 0
 
     if errors:
         print(f"\nCompleted with {len(errors)} error(s):")
@@ -166,6 +263,7 @@ def main():
             print(f"  {path}: {msg}")
     else:
         print(f"\nDone. Saved {len(entries)} .pt files to {output_dir}")
+    print(f"Processing speed: {speed:.1f} samples/sec ({elapsed:.1f}s total)")
 
 
 if __name__ == "__main__":

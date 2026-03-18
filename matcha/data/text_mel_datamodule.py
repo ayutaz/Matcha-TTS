@@ -94,6 +94,10 @@ class TextMelDataModule(LightningDataModule):
         )
 
     def train_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.trainset,
             batch_size=self.hparams.batch_size,
@@ -101,9 +105,14 @@ class TextMelDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            **kwargs,
         )
 
     def val_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.validset,
             batch_size=self.hparams.batch_size,
@@ -111,6 +120,7 @@ class TextMelDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            **kwargs,
         )
 
     def teardown(self, stage: Optional[str] = None):
@@ -236,12 +246,19 @@ class TextMelDataset(torch.utils.data.Dataset):
 class TextMelBatchCollate:
     def __init__(self, n_spks):
         self.n_spks = n_spks
+        self._len_compat_cache: Dict[int, int] = {}
+
+    def _fix_len_compat(self, length):
+        """Cached version of fix_len_compatibility."""
+        if length not in self._len_compat_cache:
+            self._len_compat_cache[length] = fix_len_compatibility(length)
+        return self._len_compat_cache[length]
 
     def __call__(self, batch):
         B = len(batch)
-        y_max_length = max([item["y"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
-        x_max_length = max([item["x"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
+        y_max_length = max(item["y"].shape[-1] for item in batch)
+        y_max_length = self._fix_len_compat(y_max_length)
+        x_max_length = max(item["x"].shape[-1] for item in batch)
         n_feats = batch[0]["y"].shape[-2]
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)

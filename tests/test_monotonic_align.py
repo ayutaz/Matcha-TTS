@@ -1,7 +1,9 @@
+import numpy as np
 import pytest
 import torch
 
-from matcha.utils.monotonic_align import maximum_path
+from matcha.utils.monotonic_align import maximum_path, maximum_path_pytorch
+from matcha.utils.monotonic_align.core import maximum_path_c
 
 
 @pytest.fixture
@@ -180,3 +182,119 @@ class TestBatchProcessing:
         # Sample 1 must have no path outside its mask.
         assert (path[1, 3:, :] == 0).all()
         assert (path[1, :, 6:] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# Tests comparing PyTorch GPU implementation against Cython reference
+# ---------------------------------------------------------------------------
+
+
+def _run_cython(value, mask):
+    """Run the Cython implementation on CPU and return float tensor."""
+    value = (value * mask).clone()
+    val_np = value.data.cpu().numpy().astype(np.float32)
+    path_np = np.zeros_like(val_np).astype(np.int32)
+    mask_np = mask.data.cpu().numpy()
+    t_x_max = mask_np.sum(1)[:, 0].astype(np.int32)
+    t_y_max = mask_np.sum(2)[:, 0].astype(np.int32)
+    maximum_path_c(path_np, val_np, t_x_max, t_y_max)
+    return torch.from_numpy(path_np).float()
+
+
+def _run_pytorch(value, mask):
+    """Run the pure PyTorch implementation on CPU."""
+    value = (value * mask).clone()
+    return maximum_path_pytorch(value, mask)
+
+
+class TestPytorchVsCython:
+    """Verify the PyTorch implementation produces identical results to Cython."""
+
+    def test_basic(self):
+        torch.manual_seed(42)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_square(self):
+        torch.manual_seed(7)
+        v = torch.randn(3, 4, 4)
+        m = torch.ones(3, 4, 4)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_single_phoneme(self):
+        torch.manual_seed(11)
+        v = torch.randn(2, 1, 5)
+        m = torch.ones(2, 1, 5)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_masked_different_lengths(self):
+        torch.manual_seed(99)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        m[0, 3:, :] = 0
+        m[0, :, 7:] = 0
+        m[1, 4:, :] = 0
+        m[1, :, 8:] = 0
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_larger_batch(self):
+        torch.manual_seed(123)
+        v = torch.randn(8, 10, 20)
+        m = torch.ones(8, 10, 20)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_minimal(self):
+        v = torch.randn(1, 1, 1)
+        m = torch.ones(1, 1, 1)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_tall_matrix(self):
+        torch.manual_seed(77)
+        v = torch.randn(2, 3, 15)
+        m = torch.ones(2, 3, 15)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_batch_consistency(self):
+        torch.manual_seed(200)
+        v = torch.randn(4, 6, 12)
+        m = torch.ones(4, 6, 12)
+        batched = _run_pytorch(v, m)
+        for b in range(4):
+            single = _run_pytorch(v[b : b + 1], m[b : b + 1])
+            assert torch.equal(batched[b], single[0]), f"Batch element {b} differs"
+
+    @pytest.mark.parametrize("seed", list(range(50)))
+    def test_fuzz(self, seed):
+        """Fuzz test: random shapes and values must match Cython output."""
+        import random
+
+        rng = random.Random(seed)
+        torch.manual_seed(seed)
+        b = rng.randint(1, 8)
+        tx = rng.randint(1, 15)
+        ty = rng.randint(tx, tx * 4)
+        v = torch.randn(b, tx, ty)
+        m = torch.ones(b, tx, ty)
+        cy = _run_cython(v, m)
+        pt = _run_pytorch(v, m)
+        assert torch.equal(cy, pt), (
+            f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
+        )
+
+    def test_dtype_preservation(self):
+        """PyTorch implementation should return the same dtype as input."""
+        torch.manual_seed(42)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        path = _run_pytorch(v, m)
+        assert path.dtype == v.dtype
+
+    def test_dispatch_cpu_uses_cython(self):
+        """On CPU, maximum_path should dispatch to Cython (not error)."""
+        torch.manual_seed(42)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        path = maximum_path(v, m)
+        assert path.shape == v.shape
+        assert path.device.type == "cpu"

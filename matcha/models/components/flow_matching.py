@@ -21,7 +21,9 @@ class BASECFM(torch.nn.Module, ABC):
         self.n_feats = n_feats
         self.n_spks = n_spks
         self.spk_emb_dim = spk_emb_dim
-        self.solver = cfm_params.solver
+        self.solver = cfm_params.solver if hasattr(cfm_params, "solver") else "euler"
+        if self.solver not in ("euler", "midpoint"):
+            raise ValueError(f"Unknown solver '{self.solver}'. Must be 'euler' or 'midpoint'.")
         if hasattr(cfm_params, "sigma_min"):
             self.sigma_min = cfm_params.sigma_min
         else:
@@ -50,6 +52,8 @@ class BASECFM(torch.nn.Module, ABC):
         """
         z = torch.randn_like(mu) * temperature
         t_span = torch.linspace(0, 1, n_timesteps + 1, device=mu.device)
+        if self.solver == "midpoint":
+            return self.solve_midpoint(z, t_span=t_span, mu=mu, mask=mask, spks=spks, cond=cond)
         return self.solve_euler(z, t_span=t_span, mu=mu, mask=mask, spks=spks, cond=cond)
 
     def solve_euler(self, x, t_span, mu, mask, spks, cond):
@@ -84,6 +88,38 @@ class BASECFM(torch.nn.Module, ABC):
 
         return sol[-1]
 
+    def solve_midpoint(self, x, t_span, mu, mask, spks, cond):
+        """
+        Midpoint (Heun) solver for ODEs. Provides better accuracy per step than Euler,
+        allowing fewer total steps for comparable quality.
+        Args:
+            x (torch.Tensor): random noise
+            t_span (torch.Tensor): n_timesteps interpolated
+                shape: (n_timesteps + 1,)
+            mu (torch.Tensor): output of encoder
+                shape: (batch_size, n_feats, mel_timesteps)
+            mask (torch.Tensor): output_mask
+                shape: (batch_size, 1, mel_timesteps)
+            spks (torch.Tensor, optional): speaker ids. Defaults to None.
+                shape: (batch_size, spk_emb_dim)
+            cond: Not used but kept for future purposes
+        """
+        t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
+
+        sol = []
+
+        for step in range(1, len(t_span)):
+            k1 = self.estimator(x, mask, mu, t, spks, cond)
+            x_mid = x + 0.5 * dt * k1
+            k2 = self.estimator(x_mid, mask, mu, t + 0.5 * dt, spks, cond)
+            x = x + dt * k2
+            t = t + dt
+            sol.append(x)
+            if step < len(t_span) - 1:
+                dt = t_span[step + 1] - t
+
+        return sol[-1]
+
     def compute_loss(self, x1, mask, mu, spks=None, cond=None):
         """Computes diffusion loss
 
@@ -104,10 +140,10 @@ class BASECFM(torch.nn.Module, ABC):
         """
         b, _, t = mu.shape
 
-        # random timestep
-        t = torch.rand([b, 1, 1], device=mu.device, dtype=mu.dtype)
-        # sample noise p(x_0)
-        z = torch.randn_like(x1)
+        # random timestep — generate in float32 for numerical stability, then cast
+        t = torch.rand([b, 1, 1], device=mu.device, dtype=torch.float32).to(mu.dtype)
+        # sample noise p(x_0) — ensure dtype matches mu
+        z = torch.randn_like(x1, dtype=mu.dtype)
 
         y = (1 - (1 - self.sigma_min) * t) * z + t * x1
         u = x1 - (1 - self.sigma_min) * z

@@ -1,13 +1,65 @@
+import os
 import random
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torch.utils.data.dataloader import DataLoader
 
 from matcha.data.text_mel_datamodule import TextMelBatchCollate
+
+
+class BucketBatchSampler(Sampler):
+    """Batch sampler that groups samples by mel length (approximated via file size)
+    to minimize padding waste within each batch.
+
+    Samples are sorted by file size into buckets, then batches are drawn from
+    within each bucket.  Bucket order is shuffled each epoch so that training
+    remains stochastic while individual batches contain similarly-sized items.
+    """
+
+    def __init__(self, file_sizes: List[int], batch_size: int, num_buckets: int = 10, drop_last: bool = False, seed: int = 0):
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.seed = seed
+        self.epoch = 0
+
+        # Sort indices by file size (proxy for mel length)
+        sorted_indices = sorted(range(len(file_sizes)), key=lambda i: file_sizes[i])
+
+        # Split sorted indices into roughly equal-sized buckets
+        bucket_size = max(1, len(sorted_indices) // num_buckets)
+        self.buckets: List[List[int]] = []
+        for start in range(0, len(sorted_indices), bucket_size):
+            bucket = sorted_indices[start : start + bucket_size]
+            if bucket:
+                self.buckets.append(bucket)
+
+    def __iter__(self):
+        rng = random.Random(self.seed + self.epoch)
+        self.epoch += 1
+
+        # Build batches within each bucket, then shuffle bucket order
+        all_batches = []
+        for bucket in self.buckets:
+            indices = list(bucket)
+            rng.shuffle(indices)
+            for start in range(0, len(indices), self.batch_size):
+                batch = indices[start : start + self.batch_size]
+                if len(batch) < self.batch_size and self.drop_last:
+                    continue
+                all_batches.append(batch)
+
+        rng.shuffle(all_batches)
+        yield from all_batches
+
+    def __len__(self):
+        total = sum(len(b) for b in self.buckets)
+        if self.drop_last:
+            return total // self.batch_size
+        return (total + self.batch_size - 1) // self.batch_size
 
 
 class PrecomputedTextMelDataset(Dataset):
@@ -27,6 +79,10 @@ class PrecomputedTextMelDataset(Dataset):
 
         random.seed(seed)
         random.shuffle(self.pt_paths)
+
+    def get_file_sizes(self) -> List[int]:
+        """Return file sizes for all .pt files (proxy for mel length)."""
+        return [os.path.getsize(p) for p in self.pt_paths]
 
     def __len__(self):
         return len(self.pt_paths)
@@ -82,15 +138,21 @@ class PrecomputedTextMelDataModule(LightningDataModule):
         )
 
     def train_dataloader(self):
+        bucket_sampler = BucketBatchSampler(
+            file_sizes=self.trainset.get_file_sizes(),
+            batch_size=self.hparams.batch_size,
+            drop_last=False,
+            seed=self.hparams.seed or 0,
+        )
+
         return DataLoader(
             dataset=self.trainset,
-            batch_size=self.hparams.batch_size,
+            batch_sampler=bucket_sampler,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            shuffle=True,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
             persistent_workers=True,
-            prefetch_factor=4,
+            prefetch_factor=8,
         )
 
     def val_dataloader(self):
@@ -102,7 +164,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
             shuffle=False,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
             persistent_workers=True,
-            prefetch_factor=4,
+            prefetch_factor=8,
         )
 
     def teardown(self, stage: Optional[str] = None):

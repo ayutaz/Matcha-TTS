@@ -14,3 +14,6 @@ sync_batchnorm: true
 
 # reduce validation frequency to cut overhead on multi-GPU runs
 check_val_every_n_epoch: 10
+
+accumulate_grad_batches: 2
+gradient_clip_val: 1.0

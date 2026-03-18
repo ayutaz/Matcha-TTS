@@ -188,11 +188,10 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
             with torch.no_grad():
                 const = -0.5 * math.log(2 * math.pi) * self.n_feats
-                factor = -0.5 * torch.ones(mu_x.shape, dtype=mu_x.dtype, device=mu_x.device)
-                y_square = torch.matmul(factor.transpose(1, 2), y**2)
-                y_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), y)
-                mu_square = torch.sum(factor * (mu_x**2), 1).unsqueeze(-1)
-                log_prior = y_square - y_mu_double + mu_square + const
+                y_square = -0.5 * torch.sum(y**2, 1, keepdim=True)
+                y_mu_double = torch.matmul(mu_x.transpose(1, 2), y)
+                mu_square = -0.5 * torch.sum(mu_x**2, 1).unsqueeze(-1)
+                log_prior = y_square + y_mu_double + mu_square + const
 
                 attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
                 attn = attn.detach()  # b, t_text, T_mel
@@ -208,9 +207,11 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         if not isinstance(out_size, type(None)):
             max_offset = (y_lengths - out_size).clamp(0)
             offset_ranges = list(zip([0] * max_offset.shape[0], max_offset.cpu().numpy()))
-            out_offset = torch.LongTensor(
-                [torch.tensor(random.choice(range(start, end)) if end > start else 0) for start, end in offset_ranges]
-            ).to(y_lengths)
+            out_offset = torch.tensor(
+                [random.choice(range(start, end)) if end > start else 0 for start, end in offset_ranges],
+                dtype=torch.long,
+                device=y_lengths.device,
+            )
             attn_cut = torch.zeros(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
             y_cut = torch.zeros(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
 
@@ -222,7 +223,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 y_cut[i, :, :y_cut_length] = y_[:, cut_lower:cut_upper]
                 attn_cut[i, :, :y_cut_length] = attn[i, :, cut_lower:cut_upper]
 
-            y_cut_lengths = torch.LongTensor(y_cut_lengths)
+            y_cut_lengths = torch.tensor(y_cut_lengths, dtype=torch.long, device=y_lengths.device)
             y_cut_mask = sequence_mask(y_cut_lengths).unsqueeze(1).to(y_mask)
 
             attn = attn_cut
@@ -243,3 +244,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             prior_loss = 0
 
         return dur_loss, prior_loss, diff_loss, attn
+
+    def enable_gradient_checkpointing(self):
+        """Enable gradient checkpointing on the decoder's estimator to reduce memory usage."""
+        if hasattr(self.decoder, "estimator") and hasattr(self.decoder.estimator, "enable_gradient_checkpointing"):
+            self.decoder.estimator.enable_gradient_checkpointing()

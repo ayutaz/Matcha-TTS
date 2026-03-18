@@ -36,10 +36,15 @@ def setup_cuda_optimizations():
     """Enable CUDA optimizations for faster training."""
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     log.info(
-        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s",
+        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s, "
+        "TF32 matmul=%s, TF32 cudnn=%s",
         torch.backends.cudnn.benchmark,
         torch.backends.cudnn.deterministic,
+        torch.backends.cuda.matmul.allow_tf32,
+        torch.backends.cudnn.allow_tf32,
     )
 
 
@@ -65,9 +70,17 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     if cfg.get("compile_model", False):
-        log.info("Compiling encoder and decoder with torch.compile...")
-        model.encoder = torch.compile(model.encoder, mode="reduce-overhead")
-        model.decoder.estimator = torch.compile(model.decoder.estimator, mode="reduce-overhead")
+        compile_mode = cfg.get("compile_mode", "default")
+        log.info("Compiling encoder and decoder with torch.compile (mode=%s)...", compile_mode)
+        model.encoder = torch.compile(model.encoder, mode=compile_mode)
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+
+    if cfg.get("gradient_checkpointing", False):
+        if hasattr(model, "enable_gradient_checkpointing"):
+            model.enable_gradient_checkpointing()
+            log.info("Gradient checkpointing enabled.")
+        else:
+            log.warning("Model does not support enable_gradient_checkpointing(); skipping.")
 
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = utils.instantiate_callbacks(cfg.get("callbacks"))

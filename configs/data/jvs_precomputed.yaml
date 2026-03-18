@@ -3,7 +3,7 @@ name: jvs_precomputed
 train_pt_dir: data/jvs_precomputed/train
 val_pt_dir: data/jvs_precomputed/val
 batch_size: 32
-num_workers: 4
+num_workers: 8
 pin_memory: True
 n_spks: 100
 n_feats: 80

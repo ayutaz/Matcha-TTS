@@ -1,4 +1,5 @@
 import argparse
+import logging
 import random
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from lightning import LightningModule
 
 from matcha.cli import VOCODER_URLS, load_matcha, load_vocoder
 
-DEFAULT_OPSET = 15
+logger = logging.getLogger(__name__)
+
+DEFAULT_OPSET = 17
 
 SEED = 1234
 random.seed(SEED)
@@ -113,7 +116,7 @@ def main():
         default=None,
         help="Vocoder checkpoint to embed  in the ONNX graph for an `e2e` like experience",
     )
-    parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 15")
+    parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 17)")
 
     args = parser.parse_args()
 
@@ -176,6 +179,17 @@ def main():
         do_constant_folding=True,
     )
     print(f"[🍵] ONNX model exported to  {args.output}")
+
+    try:
+        import onnx
+        from onnxruntime.transformers import optimizer as ort_optimizer  # noqa: F401
+
+        # Basic optimization
+        onnx_model = onnx.load(args.output)
+        onnx.checker.check_model(onnx_model)
+        logger.info("ONNX model validation passed")
+    except ImportError:
+        logger.info("onnx package not available, skipping validation")
 
 
 if __name__ == "__main__":

@@ -110,6 +110,7 @@ def main():
         help="change the speaking rate, a higher value means slower speaking rate (default: 1.0)",
     )
     parser.add_argument("--gpu", action="store_true", help="Use CPU for inference (default: use GPU if available)")
+    parser.add_argument("--tensorrt", action="store_true", help="Use TensorRT execution provider (requires --gpu)")
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -134,11 +135,24 @@ def main():
     args = parser.parse_args()
     args = validate_args(args)
 
-    if args.gpu:
-        providers = ["GPUExecutionProvider"]
+    sess_options = ort.SessionOptions()
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.intra_op_num_threads = 4
+    sess_options.inter_op_num_threads = 4
+
+    if args.gpu and args.tensorrt:
+        providers = [
+            ('TensorrtExecutionProvider', {
+                'trt_max_workspace_size': 2147483648,
+            }),
+            'CUDAExecutionProvider',
+            'CPUExecutionProvider',
+        ]
+    elif args.gpu:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
     else:
         providers = ["CPUExecutionProvider"]
-    model = ort.InferenceSession(args.model, providers=providers)
+    model = ort.InferenceSession(args.model, sess_options=sess_options, providers=providers)
 
     model_inputs = model.get_inputs()
     model_outputs = list(model.get_outputs())
@@ -172,7 +186,7 @@ def main():
     if has_vocoder_embedded:
         write_wavs(model, inputs, args.output_dir)
     elif args.vocoder:
-        external_vocoder = ort.InferenceSession(args.vocoder, providers=providers)
+        external_vocoder = ort.InferenceSession(args.vocoder, sess_options=sess_options, providers=providers)
         write_wavs(model, inputs, args.output_dir, external_vocoder=external_vocoder)
     else:
         warn = "[!] A vocoder is not embedded in the graph nor an external vocoder is provided. The mel output will be written as numpy arrays to `*.npy` files in the output directory"
