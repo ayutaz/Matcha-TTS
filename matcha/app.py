@@ -78,19 +78,19 @@ def load_model_ui(model_type, textbox):
         CURRENTLY_LOADED_MODEL = model_name
 
     if model_name == "matcha_ljspeech":
-        spk_slider = gr.update(visible=False, value=-1)
-        single_speaker_examples = gr.update(visible=True)
-        multi_speaker_examples = gr.update(visible=False)
-        length_scale = gr.update(value=0.95)
+        spk_slider = gr.Slider(visible=False, value=-1)
+        single_speaker_examples = gr.Row(visible=True)
+        multi_speaker_examples = gr.Row(visible=False)
+        length_scale = gr.Slider(value=0.95)
     else:
-        spk_slider = gr.update(visible=True, value=0)
-        single_speaker_examples = gr.update(visible=False)
-        multi_speaker_examples = gr.update(visible=True)
-        length_scale = gr.update(value=0.85)
+        spk_slider = gr.Slider(visible=True, value=0)
+        single_speaker_examples = gr.Row(visible=False)
+        multi_speaker_examples = gr.Row(visible=True)
+        length_scale = gr.Slider(value=0.85)
 
     return (
         textbox,
-        gr.update(interactive=True),
+        gr.Button(interactive=True),
         spk_slider,
         single_speaker_examples,
         multi_speaker_examples,
@@ -168,15 +168,15 @@ def main():
         processed_text = gr.State(value=None)
         processed_text_len = gr.State(value=None)
 
-        with gr.Box():
+        with gr.Group():
             with gr.Row():
-                gr.Markdown(description, scale=3)
+                gr.Markdown(description)
                 with gr.Column():
                     gr.Image(LOGO_URL, label="Matcha-TTS ロゴ", height=50, width=50, scale=1, show_label=False)
                     html = '<br><iframe width="560" height="315" src="https://www.youtube.com/embed/xmvJkz3bqw0?si=jN7ILyDsbPwJCGoa" title="YouTube動画プレーヤー" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>'
                     gr.HTML(html)
 
-        with gr.Box():
+        with gr.Group():
             radio_options = list(RADIO_OPTIONS.keys())
             model_type = gr.Radio(
                 radio_options, value=radio_options[0], label="モデルを選択", interactive=True, container=False
@@ -220,20 +220,19 @@ def main():
 
                 synth_btn = gr.Button("音声合成")
 
-        with gr.Box():
+        with gr.Group():
             with gr.Row():
                 gr.Markdown("### 音素化テキスト")
                 phonetised_text = gr.Textbox(interactive=False, scale=10, label="音素化テキスト")
 
-        with gr.Box():
+        with gr.Group():
             with gr.Row():
                 mel_spectrogram = gr.Image(interactive=False, label="メルスペクトログラム")
 
-                # with gr.Row():
                 audio = gr.Audio(interactive=False, label="音声")
 
         with gr.Row(visible=False) as example_row_lj_speech:
-            examples = gr.Examples(  # pylint: disable=unused-variable
+            gr.Examples(
                 examples=[
                     [
                         "We propose Matcha-TTS, a new approach to non-autoregressive neural TTS, that uses conditional flow matching (similar to rectified flows) to speed up O D E-based speech synthesis.",
@@ -285,7 +284,7 @@ def main():
             )
 
         with gr.Row() as example_row_multispeaker:
-            multi_speaker_examples = gr.Examples(  # pylint: disable=unused-variable
+            gr.Examples(
                 examples=[
                     [
                         "Hello everyone! I am speaker 0 and I am here to tell you that Matcha-TTS is amazing!",
@@ -330,7 +329,9 @@ def main():
                 label="マルチスピーカー サンプル",
             )
 
-        model_type.change(lambda x: gr.update(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
+        model_type.change(
+            lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]
+        ).then(
             load_model_ui,
             inputs=[model_type, text],
             outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, length_scale],
@@ -343,14 +344,13 @@ def main():
             ],
             outputs=[phonetised_text, processed_text, processed_text_len],
             api_name="matcha_tts",
-            queue=True,
         ).then(
             fn=synthesise_mel,
             inputs=[processed_text, processed_text_len, n_timesteps, mel_temp, length_scale, spk_slider],
             outputs=[audio, mel_spectrogram],
         )
 
-        demo.queue().launch(share=True)
+        demo.launch(share=True)
 
 
 if __name__ == "__main__":
