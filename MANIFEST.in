@@ -1,5 +1,5 @@
 include README.md
-include LICENSE.txt
+include LICENSE
 include *.cff
 include matcha/VERSION
 recursive-include matcha *.json
