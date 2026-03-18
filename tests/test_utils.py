@@ -166,21 +166,25 @@ class TestFixLenCompatibility:
 
 
 class TestGetUserDataDir:
-    def test_returns_path(self):
+    def test_returns_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MATCHA_HOME", str(tmp_path))
         result = get_user_data_dir()
         from pathlib import Path
 
         assert isinstance(result, Path)
 
-    def test_default_appname(self):
+    def test_default_appname(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MATCHA_HOME", str(tmp_path))
         result = get_user_data_dir()
         assert result.name == "matcha_tts"
 
-    def test_custom_appname(self):
+    def test_custom_appname(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MATCHA_HOME", str(tmp_path))
         result = get_user_data_dir("my_custom_app")
         assert result.name == "my_custom_app"
 
-    def test_directory_exists(self):
+    def test_directory_exists(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MATCHA_HOME", str(tmp_path))
         result = get_user_data_dir("test_matcha_dir")
         assert result.is_dir()
 

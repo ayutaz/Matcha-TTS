@@ -249,7 +249,7 @@ class BasicTransformerBlock(nn.Module):
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         timestep: torch.LongTensor | None = None,
-        cross_attention_kwargs: dict[str, Any] = None,
+        cross_attention_kwargs: dict[str, Any] | None = None,
         class_labels: torch.LongTensor | None = None,
     ):
         # Notice that normalization is always applied before the real computation in the following blocks.

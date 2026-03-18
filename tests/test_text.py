@@ -35,8 +35,20 @@ class _FakeEspeakBackend:
 _fake_backend.EspeakBackend = _FakeEspeakBackend
 _fake_phonemizer.backend = _fake_backend
 
-sys.modules.setdefault("phonemizer", _fake_phonemizer)
-sys.modules.setdefault("phonemizer.backend", _fake_backend)
+# Also mock the espeak submodules that the real phonemizer may try to load
+_fake_espeak = types.ModuleType("phonemizer.backend.espeak")
+_fake_espeak_espeak = types.ModuleType("phonemizer.backend.espeak.espeak")
+_fake_backend.espeak = _fake_espeak
+_fake_espeak.espeak = _fake_espeak_espeak
+
+# Force-insert mocks so they override any already-imported real modules.
+# setdefault would silently keep the real package when it is installed,
+# causing failures in environments where phonemizer is present but
+# espeak-ng is not.
+sys.modules["phonemizer"] = _fake_phonemizer
+sys.modules["phonemizer.backend"] = _fake_backend
+sys.modules["phonemizer.backend.espeak"] = _fake_espeak
+sys.modules["phonemizer.backend.espeak.espeak"] = _fake_espeak_espeak
 
 # Now it is safe to import the text modules ---------------------------------
 from matcha.text import (  # noqa: E402
