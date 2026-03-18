@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🍵 Matcha-TTS: A fast TTS architecture with conditional flow matching
+# Matcha-TTS: 条件付きフローマッチングによる高速TTSアーキテクチャ
 
-### [Shivam Mehta](https://www.kth.se/profile/smehta), [Ruibo Tu](https://www.kth.se/profile/ruibo), [Jonas Beskow](https://www.kth.se/profile/beskow), [Éva Székely](https://www.kth.se/profile/szekely), and [Gustav Eje Henter](https://people.kth.se/~ghe/)
+### [Shivam Mehta](https://www.kth.se/profile/smehta), [Ruibo Tu](https://www.kth.se/profile/ruibo), [Jonas Beskow](https://www.kth.se/profile/beskow), [Eva Szekely](https://www.kth.se/profile/szekely), [Gustav Eje Henter](https://people.kth.se/~ghe/)
 
 [![python](https://img.shields.io/badge/-Python_3.10-blue?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3100/)
 [![pytorch](https://img.shields.io/badge/PyTorch_2.0+-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
@@ -17,41 +17,41 @@
 
 </div>
 
-> This is the official code implementation of 🍵 Matcha-TTS [ICASSP 2024].
+> これは Matcha-TTS [ICASSP 2024] の公式コード実装です。
 
-We propose 🍵 Matcha-TTS, a new approach to non-autoregressive neural TTS, that uses [conditional flow matching](https://arxiv.org/abs/2210.02747) (similar to [rectified flows](https://arxiv.org/abs/2209.03003)) to speed up ODE-based speech synthesis. Our method:
+Matcha-TTS は、ODEベースの音声合成を高速化するために[条件付きフローマッチング](https://arxiv.org/abs/2210.02747)（[整流フロー](https://arxiv.org/abs/2209.03003)と類似）を使用する、非自己回帰型ニューラルTTSの新しいアプローチです。本手法の特徴：
 
-- Is probabilistic
-- Has compact memory footprint
-- Sounds highly natural
-- Is very fast to synthesise from
+- 確率的モデルである
+- コンパクトなメモリフットプリントを持つ
+- 非常に自然な音声を生成する
+- 合成速度が非常に高速である
 
-Check out our [demo page](https://shivammehta25.github.io/Matcha-TTS) and read [our ICASSP 2024 paper](https://arxiv.org/abs/2309.03199) for more details.
+詳細については、[デモページ](https://shivammehta25.github.io/Matcha-TTS)をご覧いただくか、[ICASSP 2024論文](https://arxiv.org/abs/2309.03199)をお読みください。
 
-[Pre-trained models](https://drive.google.com/drive/folders/17C_gYgEHOxI5ZypcfE_k1piKCtyR0isJ?usp=sharing) will be automatically downloaded with the CLI or gradio interface.
+[学習済みモデル](https://drive.google.com/drive/folders/17C_gYgEHOxI5ZypcfE_k1piKCtyR0isJ?usp=sharing)は、CLIまたはGradioインターフェースで自動的にダウンロードされます。
 
-You can also [try 🍵 Matcha-TTS in your browser on HuggingFace 🤗 spaces](https://huggingface.co/spaces/shivammehta25/Matcha-TTS).
+[HuggingFace Spacesでブラウザ上からMatcha-TTSを試す](https://huggingface.co/spaces/shivammehta25/Matcha-TTS)こともできます。
 
-## Teaser video
+## ティーザー動画
 
-[![Watch the video](https://img.youtube.com/vi/xmvJkz3bqw0/hqdefault.jpg)](https://youtu.be/xmvJkz3bqw0)
+[![動画を見る](https://img.youtube.com/vi/xmvJkz3bqw0/hqdefault.jpg)](https://youtu.be/xmvJkz3bqw0)
 
-## Installation
+## インストール
 
-1. Create an environment (suggested but optional)
+1. 環境を作成する（推奨ですが任意です）
 
 ```
 conda create -n matcha-tts python=3.10 -y
 conda activate matcha-tts
 ```
 
-2. Install Matcha TTS using pip or from source
+2. pipまたはソースからMatcha TTSをインストールする
 
 ```bash
 pip install matcha-tts
 ```
 
-from source
+ソースからインストールする場合
 
 ```bash
 pip install git+https://github.com/shivammehta25/Matcha-TTS.git
@@ -59,88 +59,88 @@ cd Matcha-TTS
 pip install -e .
 ```
 
-3. Run CLI / gradio app / jupyter notebook
+3. CLI / Gradioアプリ / Jupyterノートブックを実行する
 
 ```bash
-# This will download the required models
+# 必要なモデルが自動的にダウンロードされます
 matcha-tts --text "<INPUT TEXT>"
 ```
 
-or
+または
 
 ```bash
 matcha-tts-app
 ```
 
-or open `synthesis.ipynb` on jupyter notebook
+またはJupyterノートブックで `synthesis.ipynb` を開いてください
 
-### CLI Arguments
+### CLI引数
 
-- To synthesise from given text, run:
+- 指定したテキストから合成するには、以下を実行します：
 
 ```bash
 matcha-tts --text "<INPUT TEXT>"
 ```
 
-- To synthesise from a file, run:
+- ファイルから合成するには、以下を実行します：
 
 ```bash
 matcha-tts --file <PATH TO FILE>
 ```
 
-- To batch synthesise from a file, run:
+- ファイルからバッチ合成するには、以下を実行します：
 
 ```bash
 matcha-tts --file <PATH TO FILE> --batched
 ```
 
-Additional arguments
+追加の引数
 
-- Speaking rate
+- 発話速度
 
 ```bash
 matcha-tts --text "<INPUT TEXT>" --speaking_rate 1.0
 ```
 
-- Sampling temperature
+- サンプリング温度
 
 ```bash
 matcha-tts --text "<INPUT TEXT>" --temperature 0.667
 ```
 
-- Euler ODE solver steps
+- オイラーODEソルバーのステップ数
 
 ```bash
 matcha-tts --text "<INPUT TEXT>" --steps 10
 ```
 
-## Train with your own dataset
+## 独自のデータセットで学習する
 
-Let's assume we are training with LJ Speech
+ここではLJ Speechを使用して学習する場合を想定します
 
-1. Download the dataset from [here](https://keithito.com/LJ-Speech-Dataset/), extract it to `data/LJSpeech-1.1`, and prepare the file lists to point to the extracted data like for [item 5 in the setup of the NVIDIA Tacotron 2 repo](https://github.com/NVIDIA/tacotron2#setup).
+1. [こちら](https://keithito.com/LJ-Speech-Dataset/)からデータセットをダウンロードし、`data/LJSpeech-1.1` に展開します。そして、[NVIDIA Tacotron 2リポジトリのセットアップ手順5](https://github.com/NVIDIA/tacotron2#setup)のように、展開したデータを指すファイルリストを準備します。
 
-2. Clone and enter the Matcha-TTS repository
+2. Matcha-TTSリポジトリをクローンして移動する
 
 ```bash
 git clone https://github.com/shivammehta25/Matcha-TTS.git
 cd Matcha-TTS
 ```
 
-3. Install the package from source
+3. ソースからパッケージをインストールする
 
 ```bash
 pip install -e .
 ```
 
-4. Go to `configs/data/ljspeech.yaml` and change
+4. `configs/data/ljspeech.yaml` を開き、以下を変更する
 
 ```yaml
 train_filelist_path: data/filelists/ljs_audio_text_train_filelist.txt
 valid_filelist_path: data/filelists/ljs_audio_text_val_filelist.txt
 ```
 
-5. Generate normalisation statistics with the yaml file of dataset configuration
+5. データセット設定のyamlファイルを使用して正規化統計量を生成する
 
 ```bash
 matcha-data-stats -i ljspeech.yaml
@@ -148,7 +148,7 @@ matcha-data-stats -i ljspeech.yaml
 #{'mel_mean': -5.53662231756592, 'mel_std': 2.1161014277038574}
 ```
 
-Update these values in `configs/data/ljspeech.yaml` under `data_statistics` key.
+これらの値を `configs/data/ljspeech.yaml` の `data_statistics` キーに更新します。
 
 ```bash
 data_statistics:  # Computed for ljspeech dataset
@@ -156,105 +156,105 @@ data_statistics:  # Computed for ljspeech dataset
   mel_std: 2.116101
 ```
 
-to the paths of your train and validation filelists.
+学習用および検証用ファイルリストのパスを指定してください。
 
-6. Run the training script
+6. 学習スクリプトを実行する
 
 ```bash
 make train-ljspeech
 ```
 
-or
+または
 
 ```bash
 python matcha/train.py experiment=ljspeech
 ```
 
-- for a minimum memory run
+- 最小メモリで実行する場合
 
 ```bash
 python matcha/train.py experiment=ljspeech_min_memory
 ```
 
-- for multi-gpu training, run
+- マルチGPUで学習する場合
 
 ```bash
 python matcha/train.py experiment=ljspeech trainer.devices=[0,1]
 ```
 
-7. Synthesise from the custom trained model
+7. カスタム学習済みモデルから合成する
 
 ```bash
 matcha-tts --text "<INPUT TEXT>" --checkpoint_path <PATH TO CHECKPOINT>
 ```
 
-## ONNX support
+## ONNXサポート
 
-> Special thanks to [@mush42](https://github.com/mush42) for implementing ONNX export and inference support.
+> ONNXエクスポートおよび推論サポートの実装について、[@mush42](https://github.com/mush42) 氏に特別な感謝を申し上げます。
 
-It is possible to export Matcha checkpoints to [ONNX](https://onnx.ai/), and run inference on the exported ONNX graph.
+Matchaのチェックポイントを[ONNX](https://onnx.ai/)にエクスポートし、エクスポートされたONNXグラフ上で推論を実行することが可能です。
 
-### ONNX export
+### ONNXエクスポート
 
-To export a checkpoint to ONNX, first install ONNX with
+チェックポイントをONNXにエクスポートするには、まずONNXをインストールします
 
 ```bash
 pip install onnx
 ```
 
-then run the following:
+次に、以下を実行します：
 
 ```bash
 python3 -m matcha.onnx.export matcha.ckpt model.onnx --n-timesteps 5
 ```
 
-Optionally, the ONNX exporter accepts **vocoder-name** and **vocoder-checkpoint** arguments. This enables you to embed the vocoder in the exported graph and generate waveforms in a single run (similar to end-to-end TTS systems).
+オプションとして、ONNXエクスポーターは **vocoder-name** および **vocoder-checkpoint** 引数を受け付けます。これにより、エクスポートされたグラフにボコーダーを埋め込み、エンドツーエンドTTSシステムと同様に、単一の実行で波形を生成できます。
 
-**Note** that `n_timesteps` is treated as a hyper-parameter rather than a model input. This means you should specify it during export (not during inference). If not specified, `n_timesteps` is set to **5**.
+**注意**: `n_timesteps` はモデル入力ではなくハイパーパラメータとして扱われます。つまり、推論時ではなくエクスポート時に指定する必要があります。指定しない場合、`n_timesteps` は **5** に設定されます。
 
-**Important**: for now, torch>=2.1.0 is needed for export since the `scaled_product_attention` operator is not exportable in older versions. Until the final version is released, those who want to export their models must install torch>=2.1.0 manually as a pre-release.
+**重要**: 現時点では、`scaled_product_attention` 演算子が古いバージョンではエクスポートできないため、エクスポートにはtorch>=2.1.0が必要です。最終バージョンがリリースされるまで、モデルをエクスポートしたい方はtorch>=2.1.0をプレリリース版として手動でインストールする必要があります。
 
-### ONNX Inference
+### ONNX推論
 
-To run inference on the exported model, first install `onnxruntime` using
+エクスポートされたモデルで推論を実行するには、まず `onnxruntime` をインストールします
 
 ```bash
 pip install onnxruntime
-pip install onnxruntime-gpu  # for GPU inference
+pip install onnxruntime-gpu  # GPU推論用
 ```
 
-then use the following:
+次に、以下を使用します：
 
 ```bash
 python3 -m matcha.onnx.infer model.onnx --text "hey" --output-dir ./outputs
 ```
 
-You can also control synthesis parameters:
+合成パラメータを制御することもできます：
 
 ```bash
 python3 -m matcha.onnx.infer model.onnx --text "hey" --output-dir ./outputs --temperature 0.4 --speaking_rate 0.9 --spk 0
 ```
 
-To run inference on **GPU**, make sure to install **onnxruntime-gpu** package, and then pass `--gpu` to the inference command:
+**GPU**で推論を実行するには、**onnxruntime-gpu** パッケージがインストールされていることを確認し、推論コマンドに `--gpu` を渡します：
 
 ```bash
 python3 -m matcha.onnx.infer model.onnx --text "hey" --output-dir ./outputs --gpu
 ```
 
-If you exported only Matcha to ONNX, this will write mel-spectrogram as graphs and `numpy` arrays to the output directory.
-If you embedded the vocoder in the exported graph, this will write `.wav` audio files to the output directory.
+MatchaのみをONNXにエクスポートした場合、メルスペクトログラムがグラフおよび `numpy` 配列として出力ディレクトリに書き込まれます。
+エクスポートされたグラフにボコーダーを埋め込んだ場合、`.wav` 音声ファイルが出力ディレクトリに書き込まれます。
 
-If you exported only Matcha to ONNX, and you want to run a full TTS pipeline, you can pass a path to a vocoder model in `ONNX` format:
+MatchaのみをONNXにエクスポートし、フルTTSパイプラインを実行したい場合は、`ONNX` 形式のボコーダーモデルのパスを渡すことができます：
 
 ```bash
 python3 -m matcha.onnx.infer model.onnx --text "hey" --output-dir ./outputs --vocoder hifigan.small.onnx
 ```
 
-This will write `.wav` audio files to the output directory.
+これにより、`.wav` 音声ファイルが出力ディレクトリに書き込まれます。
 
-## Extract phoneme alignments from Matcha-TTS
+## Matcha-TTSからの音素アラインメント抽出
 
-If the dataset is structured as
+データセットが以下の構造になっている場合
 
 ```bash
 data/
@@ -266,32 +266,32 @@ data/
     ├── val.txt
     └── wavs
 ```
-Then you can extract the phoneme level alignments from a Trained Matcha-TTS model using:
+学習済みのMatcha-TTSモデルから音素レベルのアラインメントを以下のように抽出できます：
 ```bash
 python  matcha/utils/get_durations_from_trained_model.py -i dataset_yaml -c <checkpoint>
 ```
-Example:
+例：
 ```bash
 python  matcha/utils/get_durations_from_trained_model.py -i ljspeech.yaml -c matcha_ljspeech.ckpt
 ```
-or simply:
+または簡単に：
 ```bash
 matcha-tts-get-durations -i ljspeech.yaml -c matcha_ljspeech.ckpt
 ```
 ---
-## Train using extracted alignments
+## 抽出したアラインメントを使用して学習する
 
-In the datasetconfig turn on load duration.
-Example: `ljspeech.yaml`
+データセット設定でload durationを有効にします。
+例: `ljspeech.yaml`
 ```
 load_durations: True
 ```
-or see an examples in configs/experiment/ljspeech_from_durations.yaml
+または configs/experiment/ljspeech_from_durations.yaml の例を参照してください
 
 
-## Citation information
+## 引用情報
 
-If you use our code or otherwise find this work useful, please cite our paper:
+本コードを使用した場合、または本研究が有用であった場合は、以下の論文を引用してください：
 
 ```text
 @inproceedings{mehta2024matcha,
@@ -302,14 +302,14 @@ If you use our code or otherwise find this work useful, please cite our paper:
 }
 ```
 
-## Acknowledgements
+## 謝辞
 
-Since this code uses [Lightning-Hydra-Template](https://github.com/ashleve/lightning-hydra-template), you have all the powers that come with it.
+本コードは [Lightning-Hydra-Template](https://github.com/ashleve/lightning-hydra-template) を使用しているため、そのすべての機能を活用できます。
 
-Other source code we would like to acknowledge:
+その他、感謝を表したいソースコード：
 
-- [Coqui-TTS](https://github.com/coqui-ai/TTS/tree/dev): For helping me figure out how to make cython binaries pip installable and encouragement
-- [Hugging Face Diffusers](https://huggingface.co/): For their awesome diffusers library and its components
-- [Grad-TTS](https://github.com/huawei-noah/Speech-Backbones/tree/main/Grad-TTS): For the monotonic alignment search source code
-- [torchdyn](https://github.com/DiffEqML/torchdyn): Useful for trying other ODE solvers during research and development
-- [labml.ai](https://nn.labml.ai/transformers/rope/index.html): For the RoPE implementation
+- [Coqui-TTS](https://github.com/coqui-ai/TTS/tree/dev): Cythonバイナリをpipでインストール可能にする方法を理解する上での助力と励まし
+- [Hugging Face Diffusers](https://huggingface.co/): 優れたDiffusersライブラリとそのコンポーネント
+- [Grad-TTS](https://github.com/huawei-noah/Speech-Backbones/tree/main/Grad-TTS): 単調アラインメント探索のソースコード
+- [torchdyn](https://github.com/DiffEqML/torchdyn): 研究開発中に他のODEソルバーを試すのに有用
+- [labml.ai](https://nn.labml.ai/transformers/rope/index.html): RoPE実装

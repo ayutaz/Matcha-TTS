@@ -1,47 +1,47 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+このファイルは、Claude Code (claude.ai/code) がこのリポジトリのコードを扱う際のガイダンスを提供します。
 
-## Project Overview
+## プロジェクト概要
 
-Matcha-TTS is a fast, non-autoregressive Text-to-Speech system based on conditional flow matching (ICASSP 2024). It generates mel-spectrograms from text using an ODE-based approach, then converts them to waveforms via HiFi-GAN vocoder.
+Matcha-TTS は、条件付きフローマッチングに基づく高速な非自己回帰型テキスト音声合成システムです（ICASSP 2024）。ODEベースのアプローチによりテキストからメルスペクトログラムを生成し、HiFi-GANボコーダを通じて波形に変換します。
 
-## Common Commands
+## よく使うコマンド
 
-### Installation
+### インストール
 ```bash
-pip install -e .  # Installs package with Cython extension (monotonic_align)
+pip install -e .  # Cython拡張（monotonic_align）を含むパッケージをインストール
 ```
 
-### Training
+### 学習
 ```bash
-python matcha/train.py experiment=ljspeech              # Standard LJ Speech training
-python matcha/train.py experiment=ljspeech_min_memory    # Low-memory variant
-python matcha/train.py experiment=multispeaker           # Multi-speaker (VCTK)
+python matcha/train.py experiment=ljspeech              # 標準的なLJ Speech学習
+python matcha/train.py experiment=ljspeech_min_memory    # 省メモリ版
+python matcha/train.py experiment=multispeaker           # マルチスピーカー（VCTK）
 ```
-Training uses Hydra for config composition. Override any parameter with `key=value` syntax.
+学習にはHydraによる設定合成を使用します。`key=value` 構文で任意のパラメータを上書きできます。
 
-### Inference
+### 推論
 ```bash
-matcha-tts --text "Hello world"                          # CLI synthesis
-matcha-tts --file input.txt --batched --batch_size 32    # Batch mode
-matcha-tts-app                                           # Gradio web UI
+matcha-tts --text "Hello world"                          # CLIによる音声合成
+matcha-tts --file input.txt --batched --batch_size 32    # バッチモード
+matcha-tts-app                                           # Gradio Web UI
 ```
 
-### Testing & Linting
+### テストとリンティング
 ```bash
-make test           # Run fast tests (skip @pytest.mark.slow)
-make test-full      # Run all tests including slow
-make format         # Run pre-commit hooks (black, isort, flake8, pylint)
+make test           # 高速テストを実行（@pytest.mark.slowをスキップ）
+make test-full      # スローテストを含む全テストを実行
+make format         # pre-commitフックを実行（black, isort, flake8, pylint）
 ```
-- pytest config is in `pyproject.toml` (test dir: `tests/`)
-- Black: 120-char line length, Python 3.10 target
-- flake8 excludes: `logs/*`, `data/*`, `matcha/hifigan/*`
+- pytestの設定は `pyproject.toml` にあります（テストディレクトリ: `tests/`）
+- Black: 1行120文字、Python 3.10対象
+- flake8の除外対象: `logs/*`, `data/*`, `matcha/hifigan/*`
 
-### Data Utilities
+### データユーティリティ
 ```bash
-matcha-data-stats -i ljspeech.yaml                          # Compute mel statistics
-matcha-tts-get-durations -i ljspeech.yaml -c model.ckpt     # Extract duration alignments
+matcha-data-stats -i ljspeech.yaml                          # メル統計量の計算
+matcha-tts-get-durations -i ljspeech.yaml -c model.ckpt     # 継続時間アライメントの抽出
 ```
 
 ### ONNX
@@ -50,37 +50,38 @@ python3 -m matcha.onnx.export model.ckpt output.onnx --n-timesteps 5
 python3 -m matcha.onnx.infer output.onnx --text "hello" --output-dir ./outputs
 ```
 
-## Architecture
+## アーキテクチャ
 
-### Synthesis Pipeline
+### 音声合成パイプライン
 ```
-Text → cleaners (english_cleaners2) → phoneme sequence → intersperse blanks
+Text → cleaners (english_cleaners2) → 音素列 → ブランクの挿入
   → TextEncoder (Conformer + DurationPredictor)
-  → expand to mel-length via predicted durations
-  → CFM Decoder (Euler ODE solver, n_timesteps steps)
-  → mel-spectrogram
-  → HiFi-GAN vocoder → waveform (22050 Hz)
+  → 予測された継続時間によりメル長に展開
+  → CFM Decoder (Euler ODEソルバー、n_timestepsステップ)
+  → メルスペクトログラム
+  → HiFi-GAN vocoder → 波形 (22050 Hz)
 ```
 
-### Key Modules
+### 主要モジュール
 
-- **`matcha/models/matcha_tts.py`** — Main model (PyTorch Lightning module). Orchestrates encoder, flow matching, and synthesis.
-- **`matcha/models/components/text_encoder.py`** — Conformer-based encoder with duration predictor (ConvReluNorm).
-- **`matcha/models/components/flow_matching.py`** — Conditional flow matching (BASECFM). Euler ODE solver interpolates from noise to mel.
-- **`matcha/models/components/decoder.py`** — U-Net-like decoder with ResNet blocks, downsampling, and transformer attention (uses diffusers library).
-- **`matcha/text/`** — Text-to-phoneme pipeline. 178-symbol vocabulary. Cleaners handle normalization/number expansion.
-- **`matcha/data/text_mel_datamodule.py`** — Lightning DataModule for loading text+audio filelists, computing mel-spectrograms.
-- **`matcha/hifigan/`** — HiFi-GAN vocoder (pre-trained, loaded separately). Includes optional denoiser.
-- **`matcha/utils/monotonic_align/`** — Cython-accelerated monotonic alignment search (MAS). Compiled during `pip install`.
+- **`matcha/models/matcha_tts.py`** — メインモデル（PyTorch Lightningモジュール）。エンコーダ、フローマッチング、音声合成を統括します。
+- **`matcha/models/components/text_encoder.py`** — Conformerベースのエンコーダと継続時間予測器（ConvReluNorm）。
+- **`matcha/models/components/flow_matching.py`** — 条件付きフローマッチング（BASECFM）。Euler ODEソルバーがノイズからメルへの補間を行います。
+- **`matcha/models/components/decoder.py`** — ResNetブロック、ダウンサンプリング、Transformerアテンションを備えたU-Net型デコーダ（diffusersライブラリを使用）。
+- **`matcha/text/`** — テキストから音素への変換パイプライン。178シンボルの語彙。クリーナーが正規化や数値展開を処理します。
+- **`matcha/data/text_mel_datamodule.py`** — テキスト＋音声ファイルリストの読み込みとメルスペクトログラムの計算を行うLightning DataModule。
+- **`matcha/hifigan/`** — HiFi-GANボコーダ（事前学習済み、個別に読み込み）。オプションのデノイザーを含みます。
+- **`matcha/utils/monotonic_align/`** — Cython高速化された単調アライメント探索（MAS）。`pip install` 時にコンパイルされます。
 
-### Training Losses
-Three losses summed: **duration loss** (MSE on predicted durations), **prior loss** (KL divergence), **flow matching loss** (denoising objective on mel).
+### 学習損失
 
-### Configuration System
-Hydra configs in `configs/`. Main composition: `train.yaml` pulls from `data/`, `model/`, `trainer/`, `callbacks/`, `logger/`, `optimizer/`, `scheduler/`. Experiment files (e.g., `experiment/ljspeech.yaml`) override defaults.
+3つの損失の合計: **継続時間損失**（予測された継続時間に対するMSE）、**事前分布損失**（KLダイバージェンス）、**フローマッチング損失**（メルに対するデノイジング目的関数）。
 
-### Key Parameters
-- `n_feats: 80` (mel bins), `sample_rate: 22050`, `hop_length: 256`, `n_fft: 1024`
-- `n_vocab: 178` (phoneme vocabulary size)
-- `data_statistics`: pre-computed `mel_mean`/`mel_std` for z-score normalization
-- Inference controls: `n_timesteps` (ODE steps), `temperature` (noise variance), `length_scale` (speaking rate)
+### 設定システム
+Hydraの設定ファイルは `configs/` にあります。主な合成構造: `train.yaml` が `data/`, `model/`, `trainer/`, `callbacks/`, `logger/`, `optimizer/`, `scheduler/` から設定を取得します。実験ファイル（例: `experiment/ljspeech.yaml`）がデフォルト値を上書きします。
+
+### 主要パラメータ
+- `n_feats: 80`（メルビン数）、`sample_rate: 22050`、`hop_length: 256`、`n_fft: 1024`
+- `n_vocab: 178`（音素語彙サイズ）
+- `data_statistics`: zスコア正規化のための事前計算された `mel_mean`/`mel_std`
+- 推論制御: `n_timesteps`（ODEステップ数）、`temperature`（ノイズ分散）、`length_scale`（発話速度）
