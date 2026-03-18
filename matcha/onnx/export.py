@@ -60,12 +60,12 @@ def get_exportable_module(matcha, vocoder, n_timesteps):
     return model, output_names
 
 
-def get_inputs(is_multi_speaker):
+def get_inputs(is_multi_speaker, n_vocab=178):
     """
     Create dummy inputs for tracing
     """
     dummy_input_length = 50
-    x = torch.randint(low=0, high=20, size=(1, dummy_input_length), dtype=torch.long)
+    x = torch.randint(low=0, high=n_vocab, size=(1, dummy_input_length), dtype=torch.long)
     x_lengths = torch.LongTensor([dummy_input_length])
 
     # Scales
@@ -132,8 +132,9 @@ def main():
         vocoder = None
 
     is_multi_speaker = matcha.n_spks > 1
+    n_vocab = matcha.n_vocab
 
-    dummy_input, input_names = get_inputs(is_multi_speaker)
+    dummy_input, input_names = get_inputs(is_multi_speaker, n_vocab=n_vocab)
     model, output_names = get_exportable_module(matcha, vocoder, args.n_timesteps)
 
     # Set dynamic shape for inputs/outputs

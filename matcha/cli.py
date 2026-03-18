@@ -159,9 +159,6 @@ def validate_args(args):
         assert args.batch_size > 0, "Batch size must be greater than 0"
     assert args.speaking_rate > 0, "Speaking rate must be greater than 0"
 
-    if args.cleaners is None:
-        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
-
     return args
 
 
@@ -272,9 +269,9 @@ def cli():
     parser.add_argument(
         "--language",
         type=str,
-        default="en",
+        default=None,
         choices=["en", "ja"],
-        help="Language for text processing (default: en)",
+        help="Language for text processing (default: auto-detect from model)",
     )
     parser.add_argument(
         "--cleaners",
@@ -288,7 +285,6 @@ def cli():
 
     args = validate_args(args)
     device = get_device(args)
-    print_config(args)
     paths = assert_required_models_available(args)
 
     if args.checkpoint_path is not None:
@@ -298,6 +294,20 @@ def cli():
 
     model = load_matcha(args.model, paths["matcha"], device)
     vocoder, denoiser = load_vocoder(args.vocoder, paths["vocoder"], device)
+
+    # Auto-detect language from model if not explicitly set
+    if args.language is None:
+        if hasattr(model, "n_vocab") and model.n_vocab == 52:
+            args.language = "ja"
+            print("[*] Auto-detected language: Japanese (n_vocab=52)")
+        else:
+            args.language = "en"
+
+    # Set cleaners if not explicitly provided
+    if args.cleaners is None:
+        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
+
+    print_config(args)
 
     texts = get_texts(args)
 
@@ -418,6 +428,8 @@ def print_config(args):
     print("[!] Configurations: ")
     print(f"\t- Model: {args.model}")
     print(f"\t- Vocoder: {args.vocoder}")
+    print(f"\t- Language: {args.language}")
+    print(f"\t- Cleaners: {args.cleaners}")
     print(f"\t- Temperature: {args.temperature}")
     print(f"\t- Speaking rate: {args.speaking_rate}")
     print(f"\t- Number of ODE steps: {args.steps}")

@@ -83,6 +83,18 @@ def load_model_ui(model_type, textbox):
 
     global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
     if model_name != CURRENTLY_LOADED_MODEL:
+        model_path = MATCHA_TTS_LOC(model_name)
+        if not model_path.exists():
+            gr.Warning(f"モデル '{model_name}' が見つかりません: {model_path}")
+            return (
+                textbox,
+                gr.Button(interactive=False),
+                gr.Slider(visible=False, value=-1),
+                gr.Row(visible=False),
+                gr.Row(visible=False),
+                gr.Row(visible=False),
+                gr.Slider(value=1.0),
+            )
         model, vocoder, denoiser = load_model(model_name, vocoder_name)
         CURRENTLY_LOADED_MODEL = model_name
     CURRENT_LANGUAGE = language
@@ -171,6 +183,10 @@ def ljspeech_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
 def jsut_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
     global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_jsut":
+        model_path = MATCHA_TTS_LOC("matcha_jsut")
+        if not model_path.exists():
+            gr.Warning("JSUTモデルが見つかりません。先にモデルを学習してください。")
+            return "", None, None
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_jsut", "hifigan_univ_v1")
         CURRENTLY_LOADED_MODEL = "matcha_jsut"

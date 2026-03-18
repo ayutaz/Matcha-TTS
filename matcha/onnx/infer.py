@@ -18,6 +18,8 @@ def validate_args(args):
     )
     assert args.temperature >= 0, "Sampling temperature cannot be negative"
     assert args.speaking_rate >= 0, "Speaking rate must be greater than 0"
+    if args.cleaners is None:
+        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
     return args
 
 
@@ -114,6 +116,20 @@ def main():
         default=os.getcwd(),
         help="Output folder to save results (default: current dir)",
     )
+    parser.add_argument(
+        "--language",
+        type=str,
+        default="en",
+        choices=["en", "ja"],
+        help="Language for text processing (default: en)",
+    )
+    parser.add_argument(
+        "--cleaners",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Text cleaners to use (default: auto-selected based on --language)",
+    )
 
     args = parser.parse_args()
     args = validate_args(args)
@@ -133,7 +149,7 @@ def main():
         with open(args.file, encoding="utf-8") as file:
             text_lines = file.read().splitlines()
 
-    processed_lines = [process_text(0, line, "cpu") for line in text_lines]
+    processed_lines = [process_text(0, line, "cpu", cleaners=args.cleaners, language=args.language) for line in text_lines]
     x = [line["x"].squeeze() for line in processed_lines]
     # Pad
     x = torch.nn.utils.rnn.pad_sequence(x, batch_first=True)
