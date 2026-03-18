@@ -8,24 +8,27 @@ Matcha-TTS は、条件付きフローマッチングに基づく高速な非自
 
 ## よく使うコマンド
 
-### インストール
+### セットアップ（uv）
 ```bash
-pip install -e .  # Cython拡張（monotonic_align）を含むパッケージをインストール
+uv sync                      # 依存関係をインストール（Cython拡張を含む）
+uv sync --all-groups         # 全開発依存関係をインストール
+uv sync --extra app          # Gradio Web UIの依存関係を追加
+uv sync --extra onnx         # ONNXサポートの依存関係を追加
 ```
 
 ### 学習
 ```bash
-python matcha/train.py experiment=ljspeech              # 標準的なLJ Speech学習
-python matcha/train.py experiment=ljspeech_min_memory    # 省メモリ版
-python matcha/train.py experiment=multispeaker           # マルチスピーカー（VCTK）
+uv run python matcha/train.py experiment=ljspeech              # 標準的なLJ Speech学習
+uv run python matcha/train.py experiment=ljspeech_min_memory    # 省メモリ版
+uv run python matcha/train.py experiment=multispeaker           # マルチスピーカー（VCTK）
 ```
 学習にはHydraによる設定合成を使用します。`key=value` 構文で任意のパラメータを上書きできます。
 
 ### 推論
 ```bash
-matcha-tts --text "Hello world"                          # CLIによる音声合成
-matcha-tts --file input.txt --batched --batch_size 32    # バッチモード
-matcha-tts-app                                           # Gradio Web UI
+uv run matcha-tts --text "Hello world"                          # CLIによる音声合成
+uv run matcha-tts --file input.txt --batched --batch_size 32    # バッチモード
+uv run matcha-tts-app                                           # Gradio Web UI
 ```
 
 ### テストとリンティング
@@ -40,14 +43,14 @@ make format         # pre-commitフックを実行（black, isort, flake8, pylin
 
 ### データユーティリティ
 ```bash
-matcha-data-stats -i ljspeech.yaml                          # メル統計量の計算
-matcha-tts-get-durations -i ljspeech.yaml -c model.ckpt     # 継続時間アライメントの抽出
+uv run matcha-data-stats -i ljspeech.yaml                          # メル統計量の計算
+uv run matcha-tts-get-durations -i ljspeech.yaml -c model.ckpt     # 継続時間アライメントの抽出
 ```
 
 ### ONNX
 ```bash
-python3 -m matcha.onnx.export model.ckpt output.onnx --n-timesteps 5
-python3 -m matcha.onnx.infer output.onnx --text "hello" --output-dir ./outputs
+uv run python3 -m matcha.onnx.export model.ckpt output.onnx --n-timesteps 5
+uv run python3 -m matcha.onnx.infer output.onnx --text "hello" --output-dir ./outputs
 ```
 
 ## アーキテクチャ
@@ -71,7 +74,7 @@ Text → cleaners (english_cleaners2) → 音素列 → ブランクの挿入
 - **`matcha/text/`** — テキストから音素への変換パイプライン。178シンボルの語彙。クリーナーが正規化や数値展開を処理します。
 - **`matcha/data/text_mel_datamodule.py`** — テキスト＋音声ファイルリストの読み込みとメルスペクトログラムの計算を行うLightning DataModule。
 - **`matcha/hifigan/`** — HiFi-GANボコーダ（事前学習済み、個別に読み込み）。オプションのデノイザーを含みます。
-- **`matcha/utils/monotonic_align/`** — Cython高速化された単調アライメント探索（MAS）。`pip install` 時にコンパイルされます。
+- **`matcha/utils/monotonic_align/`** — Cython高速化された単調アライメント探索（MAS）。`uv sync` 時にコンパイルされます。
 
 ### 学習損失
 

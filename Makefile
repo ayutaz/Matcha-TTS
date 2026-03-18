@@ -15,28 +15,35 @@ clean-logs: ## Clean logs
 
 create-package: ## Create wheel and tar gz
 	rm -rf dist/
-	python setup.py bdist_wheel --plat-name=manylinux1_x86_64
-	python setup.py sdist
-	python -m twine upload  dist/* --verbose --skip-existing
+	uv build
 
 format: ## Run pre-commit hooks
-	pre-commit run -a
+	uv run pre-commit run -a
 
-sync: ## Merge changes from main branch to your current branch
+sync: ## Sync project dependencies
+	uv sync --all-groups
+
+sync-prod: ## Sync production dependencies only
+	uv sync --no-dev
+
+lock: ## Update the lockfile
+	uv lock
+
+git-sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
 
 test: ## Run not slow tests
-	pytest -k "not slow"
+	uv run pytest -k "not slow"
 
 test-full: ## Run all tests
-	pytest
+	uv run pytest
 
 train-ljspeech: ## Train the model
-	python matcha/train.py experiment=ljspeech
+	uv run python matcha/train.py experiment=ljspeech
 
 train-ljspeech-min: ## Train the model with minimum memory
-	python matcha/train.py experiment=ljspeech_min_memory
+	uv run python matcha/train.py experiment=ljspeech_min_memory
 
 start_app: ## Start the app
-	python matcha/app.py
+	uv run python matcha/app.py
