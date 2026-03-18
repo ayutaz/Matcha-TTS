@@ -2,6 +2,7 @@
 This is a base lightning module that can be used to train a model.
 The benefit of this abstraction is that all the logic outside of model definition can be reused for different models.
 """
+
 import inspect
 from abc import ABC
 from typing import Any, Dict
@@ -73,7 +74,7 @@ class BaseLightningClass(LightningModule, ABC):
             "diff_loss": diff_loss,
         }
 
-    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         self.ckpt_loaded_epoch = checkpoint["epoch"]  # pylint: disable=attribute-defined-outside-init
 
     def training_step(self, batch: Any, batch_idx: int):

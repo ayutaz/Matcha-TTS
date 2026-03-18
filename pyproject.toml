@@ -61,6 +61,7 @@ logging = [
 [dependency-groups]
 dev = [
     "pre-commit",
+    "ruff",
 ]
 test = [
     "pytest",
@@ -95,28 +96,55 @@ exclude = ["tests", "tests.*", "examples", "examples.*"]
 [tool.setuptools.package-data]
 matcha = ["VERSION", "**/*.json", "**/*.html", "**/*.png", "**/*.md", "**/*.pyx"]
 
-[tool.black]
+[tool.ruff]
 line-length = 120
-target-version = ['py312']
-exclude = '''
+target-version = "py312"
+exclude = [
+    ".eggs", ".git", ".hg", ".mypy_cache", ".tox", ".venv",
+    "_build", "buck-out", "build", "dist",
+    "logs", "data", "matcha/hifigan",
+]
 
-(
-  /(
-      \.eggs         # exclude a few common directories in the
-    | \.git          # root of the project
-    | \.hg
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | buck-out
-    | build
-    | dist
-  )/
-  | foo.py           # also separately exclude a file named foo.py in
-                     # the root of the project
-)
-'''
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "PLC",  # pylint convention
+    "PLE",  # pylint error
+    "PLW",  # pylint warning
+]
+ignore = [
+    "E203",   # whitespace before ':'
+    "E402",   # module level import not at top
+    "E501",   # line too long (handled by formatter)
+    "E741",   # ambiguous variable name
+    "F401",   # unused import
+    "F841",   # local variable assigned but never used
+    "UP015",  # unnecessary open mode parameters
+    "B007",   # unused loop variable
+    "B905",   # zip without strict
+    "SIM108", # use ternary operator
+    "SIM117", # nested with statements (gradio pattern)
+    "PLW0603", # global statement
+    "PLW0602", # global variable not assigned
+    "PLW2901", # redefined loop variable
+    "PLC0415", # import not at top level
+    "B028",   # no stacklevel in warnings.warn
+    "E731",   # lambda assignment
+    "UP035",  # deprecated typing imports (Dict, List, Tuple)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["matcha"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.pytest.ini_options]
 addopts = [

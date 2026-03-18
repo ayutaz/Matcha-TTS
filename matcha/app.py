@@ -73,7 +73,7 @@ def load_model_ui(model_type, textbox):
     model_name, vocoder_name = RADIO_OPTIONS[model_type]["model"], RADIO_OPTIONS[model_type]["vocoder"]
 
     global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
-    if CURRENTLY_LOADED_MODEL != model_name:
+    if model_name != CURRENTLY_LOADED_MODEL:
         model, vocoder, denoiser = load_model(model_name, vocoder_name)
         CURRENTLY_LOADED_MODEL = model_name
 
@@ -220,16 +220,14 @@ def main():
 
                 synth_btn = gr.Button("音声合成")
 
-        with gr.Group():
-            with gr.Row():
-                gr.Markdown("### 音素化テキスト")
-                phonetised_text = gr.Textbox(interactive=False, scale=10, label="音素化テキスト")
+        with gr.Group(), gr.Row():
+            gr.Markdown("### 音素化テキスト")
+            phonetised_text = gr.Textbox(interactive=False, scale=10, label="音素化テキスト")
 
-        with gr.Group():
-            with gr.Row():
-                mel_spectrogram = gr.Image(interactive=False, label="メルスペクトログラム")
+        with gr.Group(), gr.Row():
+            mel_spectrogram = gr.Image(interactive=False, label="メルスペクトログラム")
 
-                audio = gr.Audio(interactive=False, label="音声")
+            audio = gr.Audio(interactive=False, label="音声")
 
         with gr.Row(visible=False) as example_row_lj_speech:
             gr.Examples(
@@ -329,9 +327,7 @@ def main():
                 label="マルチスピーカー サンプル",
             )
 
-        model_type.change(
-            lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]
-        ).then(
+        model_type.change(lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
             load_model_ui,
             inputs=[model_type, text],
             outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, length_scale],

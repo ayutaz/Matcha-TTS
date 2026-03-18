@@ -1,10 +1,11 @@
 import os
 import sys
 import warnings
+from collections.abc import Callable
 from importlib.util import find_spec
 from math import ceil
 from pathlib import Path
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import gdown
 import matplotlib.pyplot as plt
@@ -71,7 +72,7 @@ def task_wrapper(task_func: Callable) -> Callable:
     :return: The wrapped task function.
     """
 
-    def wrap(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def wrap(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         # execute the task
         try:
             metric_dict, object_dict = task_func(cfg=cfg)
@@ -104,7 +105,7 @@ def task_wrapper(task_func: Callable) -> Callable:
     return wrap
 
 
-def get_metric_value(metric_dict: Dict[str, Any], metric_name: str) -> float:
+def get_metric_value(metric_dict: dict[str, Any], metric_name: str) -> float:
     """Safely retrieves value of the metric logged in LightningModule.
 
     :param metric_dict: A dict containing metric values.
@@ -255,7 +256,7 @@ def get_phoneme_durations(durations, phones):
         )
         start = duration
 
-    assert list(duration_json[-1].values())[0]["endtime"] == sum(
-        durations
-    ), f"{list(duration_json[-1].values())[0]['endtime'],  sum(durations)}"
+    assert list(duration_json[-1].values())[0]["endtime"] == sum(durations), (
+        f"{list(duration_json[-1].values())[0]['endtime'], sum(durations)}"
+    )
     return duration_json
