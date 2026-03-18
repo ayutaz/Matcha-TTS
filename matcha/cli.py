@@ -84,7 +84,7 @@ def assert_required_models_available(args):
 def load_hifigan(checkpoint_path, device):
     h = AttrDict(v1)
     hifigan = HiFiGAN(h).to(device)
-    hifigan.load_state_dict(torch.load(checkpoint_path, map_location=device)["generator"])
+    hifigan.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False)["generator"])
     _ = hifigan.eval()
     hifigan.remove_weight_norm()
     return hifigan
@@ -107,7 +107,7 @@ def load_vocoder(vocoder_name, checkpoint_path, device):
 
 def load_matcha(model_name, checkpoint_path, device):
     print(f"[!] Loading {model_name}!")
-    model = MatchaTTS.load_from_checkpoint(checkpoint_path, map_location=device)
+    model = MatchaTTS.load_from_checkpoint(checkpoint_path, map_location=device, weights_only=False)
     _ = model.eval()
 
     print(f"[+] {model_name} loaded!")

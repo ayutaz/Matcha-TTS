@@ -40,11 +40,11 @@ def VOCODER_LOC(x):
 
 LOGO_URL = "https://shivammehta25.github.io/Matcha-TTS/images/logo.png"
 RADIO_OPTIONS = {
-    "Multi Speaker (VCTK)": {
+    "マルチスピーカー (VCTK)": {
         "model": "matcha_vctk",
         "vocoder": "hifigan_univ_v1",
     },
-    "Single Speaker (LJ Speech)": {
+    "シングルスピーカー (LJ Speech)": {
         "model": "matcha_ljspeech",
         "vocoder": "hifigan_T2_v1",
     },
@@ -147,24 +147,24 @@ def ljspeech_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
 
 
 def main():
-    description = """# 🍵 Matcha-TTS: A fast TTS architecture with conditional flow matching
-    ### [Shivam Mehta](https://www.kth.se/profile/smehta), [Ruibo Tu](https://www.kth.se/profile/ruibo), [Jonas Beskow](https://www.kth.se/profile/beskow), [Éva Székely](https://www.kth.se/profile/szekely), and [Gustav Eje Henter](https://people.kth.se/~ghe/)
-    We propose 🍵 Matcha-TTS, a new approach to non-autoregressive neural TTS, that uses conditional flow matching (similar to rectified flows) to speed up ODE-based speech synthesis. Our method:
+    description = """# 🍵 Matcha-TTS: 条件付きフローマッチングによる高速TTSアーキテクチャ
+    ### [Shivam Mehta](https://www.kth.se/profile/smehta), [Ruibo Tu](https://www.kth.se/profile/ruibo), [Jonas Beskow](https://www.kth.se/profile/beskow), [Éva Székely](https://www.kth.se/profile/szekely), [Gustav Eje Henter](https://people.kth.se/~ghe/)
+    🍵 Matcha-TTS は、条件付きフローマッチング（整流フローと類似）を用いてODEベースの音声合成を高速化する、非自己回帰型ニューラルTTSの新しいアプローチです。本手法の特徴：
 
 
-    * Is probabilistic
-    * Has compact memory footprint
-    * Sounds highly natural
-    * Is very fast to synthesise from
+    * 確率的モデルである
+    * コンパクトなメモリフットプリントを持つ
+    * 非常に自然な音声を生成する
+    * 合成速度が非常に高速である
 
 
-    Check out our [demo page](https://shivammehta25.github.io/Matcha-TTS). Read our [arXiv preprint for more details](https://arxiv.org/abs/2309.03199).
-    Code is available in our [GitHub repository](https://github.com/shivammehta25/Matcha-TTS), along with pre-trained models.
+    [デモページ](https://shivammehta25.github.io/Matcha-TTS)をご覧いただくか、[arXiv論文](https://arxiv.org/abs/2309.03199)をお読みください。
+    コードと学習済みモデルは[GitHubリポジトリ](https://github.com/shivammehta25/Matcha-TTS)で公開しています。
 
-    Cached examples are available at the bottom of the page.
+    ページ下部にサンプル例があります。
     """
 
-    with gr.Blocks(title="🍵 Matcha-TTS: A fast TTS architecture with conditional flow matching") as demo:
+    with gr.Blocks(title="🍵 Matcha-TTS: 条件付きフローマッチングによる高速TTSアーキテクチャ") as demo:
         processed_text = gr.State(value=None)
         processed_text_len = gr.State(value=None)
 
@@ -172,29 +172,29 @@ def main():
             with gr.Row():
                 gr.Markdown(description, scale=3)
                 with gr.Column():
-                    gr.Image(LOGO_URL, label="Matcha-TTS logo", height=50, width=50, scale=1, show_label=False)
-                    html = '<br><iframe width="560" height="315" src="https://www.youtube.com/embed/xmvJkz3bqw0?si=jN7ILyDsbPwJCGoa" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>'
+                    gr.Image(LOGO_URL, label="Matcha-TTS ロゴ", height=50, width=50, scale=1, show_label=False)
+                    html = '<br><iframe width="560" height="315" src="https://www.youtube.com/embed/xmvJkz3bqw0?si=jN7ILyDsbPwJCGoa" title="YouTube動画プレーヤー" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>'
                     gr.HTML(html)
 
         with gr.Box():
             radio_options = list(RADIO_OPTIONS.keys())
             model_type = gr.Radio(
-                radio_options, value=radio_options[0], label="Choose a Model", interactive=True, container=False
+                radio_options, value=radio_options[0], label="モデルを選択", interactive=True, container=False
             )
 
             with gr.Row():
-                gr.Markdown("# Text Input")
+                gr.Markdown("# テキスト入力")
             with gr.Row():
-                text = gr.Textbox(value="", lines=2, label="Text to synthesise", scale=3)
+                text = gr.Textbox(value="", lines=2, label="合成するテキスト", scale=3)
                 spk_slider = gr.Slider(
-                    minimum=0, maximum=107, step=1, value=args.spk, label="Speaker ID", interactive=True, scale=1
+                    minimum=0, maximum=107, step=1, value=args.spk, label="話者ID", interactive=True, scale=1
                 )
 
             with gr.Row():
-                gr.Markdown("### Hyper parameters")
+                gr.Markdown("### ハイパーパラメータ")
             with gr.Row():
                 n_timesteps = gr.Slider(
-                    label="Number of ODE steps",
+                    label="ODEステップ数",
                     minimum=1,
                     maximum=100,
                     step=1,
@@ -202,7 +202,7 @@ def main():
                     interactive=True,
                 )
                 length_scale = gr.Slider(
-                    label="Length scale (Speaking rate)",
+                    label="長さスケール（発話速度）",
                     minimum=0.5,
                     maximum=1.5,
                     step=0.05,
@@ -210,7 +210,7 @@ def main():
                     interactive=True,
                 )
                 mel_temp = gr.Slider(
-                    label="Sampling temperature",
+                    label="サンプリング温度",
                     minimum=0.00,
                     maximum=2.001,
                     step=0.16675,
@@ -218,19 +218,19 @@ def main():
                     interactive=True,
                 )
 
-                synth_btn = gr.Button("Synthesise")
+                synth_btn = gr.Button("音声合成")
 
         with gr.Box():
             with gr.Row():
-                gr.Markdown("### Phonetised text")
-                phonetised_text = gr.Textbox(interactive=False, scale=10, label="Phonetised text")
+                gr.Markdown("### 音素化テキスト")
+                phonetised_text = gr.Textbox(interactive=False, scale=10, label="音素化テキスト")
 
         with gr.Box():
             with gr.Row():
-                mel_spectrogram = gr.Image(interactive=False, label="mel spectrogram")
+                mel_spectrogram = gr.Image(interactive=False, label="メルスペクトログラム")
 
                 # with gr.Row():
-                audio = gr.Audio(interactive=False, label="Audio")
+                audio = gr.Audio(interactive=False, label="音声")
 
         with gr.Row(visible=False) as example_row_lj_speech:
             examples = gr.Examples(  # pylint: disable=unused-variable
@@ -281,7 +281,7 @@ def main():
                 fn=ljspeech_example_cacher,
                 inputs=[text, n_timesteps, mel_temp, length_scale],
                 outputs=[phonetised_text, audio, mel_spectrogram],
-                cache_examples=True,
+                cache_examples=False,
             )
 
         with gr.Row() as example_row_multispeaker:
@@ -326,8 +326,8 @@ def main():
                 fn=multispeaker_example_cacher,
                 inputs=[text, n_timesteps, mel_temp, length_scale, spk_slider],
                 outputs=[phonetised_text, audio, mel_spectrogram],
-                cache_examples=True,
-                label="Multi Speaker Examples",
+                cache_examples=False,
+                label="マルチスピーカー サンプル",
             )
 
         model_type.change(lambda x: gr.update(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
