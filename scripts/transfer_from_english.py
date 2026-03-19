@@ -7,8 +7,7 @@ Usage:
     uv run python scripts/transfer_from_english.py \
         --source matcha_ljspeech.ckpt \
         --target matcha_jsut_init.ckpt \
-        --n-vocab-new 52 \
-        --n-channels 192
+        --n-vocab-new 52
 """
 
 import argparse
@@ -25,7 +24,12 @@ def main():
     parser.add_argument("--source", type=str, required=True, help="Path to English checkpoint (.ckpt)")
     parser.add_argument("--target", type=str, required=True, help="Output path for Japanese initial checkpoint")
     parser.add_argument("--n-vocab-new", type=int, default=52, help="New vocabulary size (default: 52 for Japanese)")
-    parser.add_argument("--n-channels", type=int, default=192, help="Embedding dimension (default: 192)")
+    parser.add_argument(
+        "--n-channels",
+        type=int,
+        default=None,
+        help="Embedding dimension. Auto-detected from checkpoint if omitted.",
+    )
     args = parser.parse_args()
 
     source_path = Path(args.source)
@@ -48,14 +52,23 @@ def main():
         )
 
     old_emb = state_dict[emb_key]
-    print(f"[*] Original embedding: {old_emb.shape} (vocab={old_emb.shape[0]}, dim={old_emb.shape[1]})")
+    n_channels = old_emb.shape[1]
+    print(f"[*] Original embedding: {old_emb.shape} (vocab={old_emb.shape[0]}, dim={n_channels})")
+
+    # Validate --n-channels against the checkpoint if the user provided it
+    if args.n_channels is not None and args.n_channels != n_channels:
+        raise ValueError(
+            f"--n-channels ({args.n_channels}) does not match checkpoint "
+            f"embedding dimension ({n_channels}). "
+            f"Remove --n-channels to auto-detect from checkpoint."
+        )
 
     # Create new embedding with Xavier uniform initialization
-    new_emb = nn.Embedding(args.n_vocab_new, args.n_channels)
+    new_emb = nn.Embedding(args.n_vocab_new, n_channels)
     nn.init.xavier_uniform_(new_emb.weight)
 
     state_dict[emb_key] = new_emb.weight.data
-    print(f"[+] New embedding: {new_emb.weight.shape} (vocab={args.n_vocab_new}, dim={args.n_channels})")
+    print(f"[+] New embedding: {new_emb.weight.shape} (vocab={args.n_vocab_new}, dim={n_channels})")
 
     # Update hyperparameters if present
     if "hyper_parameters" in checkpoint and "n_vocab" in checkpoint["hyper_parameters"]:

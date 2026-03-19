@@ -16,6 +16,8 @@ from pathlib import Path
 
 import torchaudio
 
+_resamplers: dict[tuple[int, int], torchaudio.transforms.Resample] = {}
+
 
 def resample_audio(input_path, output_path, orig_sr=48000, target_sr=22050):
     """Resample a single audio file."""
@@ -24,8 +26,10 @@ def resample_audio(input_path, output_path, orig_sr=48000, target_sr=22050):
         print(f"  [!] Expected {orig_sr} Hz but got {sr} Hz for {input_path}")
         orig_sr = sr
     if orig_sr != target_sr:
-        resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
-        waveform = resampler(waveform)
+        key = (orig_sr, target_sr)
+        if key not in _resamplers:
+            _resamplers[key] = torchaudio.transforms.Resample(orig_sr, target_sr)
+        waveform = _resamplers[key](waveform)
     torchaudio.save(str(output_path), waveform, target_sr)
 
 

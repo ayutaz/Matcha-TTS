@@ -152,7 +152,7 @@ def ipa_simplifier(text):
 
 _PHONEME_RE = re.compile(r"-([^+]+)\+")
 _A1_RE = re.compile(r"/A:([0-9-]+)\+")
-_A2_RE = re.compile(r"\+(\d+)\+")
+_A2_RE = re.compile(r"/A:[0-9-]+\+(\d+)\+")
 _F1_RE = re.compile(r"/F:(\d+)_")
 
 

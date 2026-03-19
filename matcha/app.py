@@ -28,7 +28,6 @@ args = Namespace(
 )
 
 CURRENTLY_LOADED_MODEL = args.model
-CURRENT_LANGUAGE = "en"
 
 # Cache for loaded models: key -> (model, vocoder, denoiser)
 _model_cache = {}
@@ -121,7 +120,7 @@ def load_model_ui(model_type, textbox):
     model_name, vocoder_name = RADIO_OPTIONS[model_type]["model"], RADIO_OPTIONS[model_type]["vocoder"]
     language = RADIO_OPTIONS[model_type]["language"]
 
-    global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
+    global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
     if model_name != CURRENTLY_LOADED_MODEL:
         model_path = MATCHA_TTS_LOC(model_name)
         if not model_path.exists():
@@ -134,10 +133,10 @@ def load_model_ui(model_type, textbox):
                 gr.Row(visible=False),
                 gr.Row(visible=False),
                 gr.Slider(value=1.0),
+                language,
             )
         model, vocoder, denoiser = load_model(model_name, vocoder_name)
         CURRENTLY_LOADED_MODEL = model_name
-    CURRENT_LANGUAGE = language
 
     if model_name == "matcha_ljspeech":
         spk_slider = gr.Slider(visible=False, value=-1)
@@ -166,13 +165,14 @@ def load_model_ui(model_type, textbox):
         multi_speaker_examples,
         japanese_examples,
         length_scale,
+        language,
     )
 
 
 @torch.inference_mode()
-def process_text_gradio(text):
-    cleaners = ["japanese_cleaners"] if CURRENT_LANGUAGE == "ja" else None
-    output = process_text(1, text, device, cleaners=cleaners, language=CURRENT_LANGUAGE)
+def process_text_gradio(text, language):
+    cleaners = ["japanese_cleaners"] if language == "ja" else None
+    output = process_text(1, text, device, cleaners=cleaners, language=language)
     return output["x_phones"][1::2], output["x"], output["x_lengths"]
 
 
@@ -195,33 +195,31 @@ def synthesise_mel(text, text_length, n_timesteps, temperature, length_scale, sp
 
 
 def multispeaker_example_cacher(text, n_timesteps, mel_temp, length_scale, spk):
-    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
+    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_vctk":
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_vctk", "hifigan_univ_v1")
         CURRENTLY_LOADED_MODEL = "matcha_vctk"
-    CURRENT_LANGUAGE = "en"
 
-    phones, text, text_lengths = process_text_gradio(text)
+    phones, text, text_lengths = process_text_gradio(text, language="en")
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
     return phones, audio, mel_spectrogram
 
 
 def ljspeech_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
-    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
+    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_ljspeech":
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_ljspeech", "hifigan_T2_v1")
         CURRENTLY_LOADED_MODEL = "matcha_ljspeech"
-    CURRENT_LANGUAGE = "en"
 
-    phones, text, text_lengths = process_text_gradio(text)
+    phones, text, text_lengths = process_text_gradio(text, language="en")
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
     return phones, audio, mel_spectrogram
 
 
 def jsut_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
-    global CURRENTLY_LOADED_MODEL, CURRENT_LANGUAGE  # pylint: disable=global-statement
+    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
     if CURRENTLY_LOADED_MODEL != "matcha_jsut":
         model_path = MATCHA_TTS_LOC("matcha_jsut")
         if not model_path.exists():
@@ -230,9 +228,8 @@ def jsut_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
         global model, vocoder, denoiser  # pylint: disable=global-statement
         model, vocoder, denoiser = load_model("matcha_jsut", "hifigan_univ_v1")
         CURRENTLY_LOADED_MODEL = "matcha_jsut"
-    CURRENT_LANGUAGE = "ja"
 
-    phones, text, text_lengths = process_text_gradio(text)
+    phones, text, text_lengths = process_text_gradio(text, language="ja")
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
     return phones, audio, mel_spectrogram
 
@@ -258,6 +255,7 @@ def main():
     with gr.Blocks(title="🍵 Matcha-TTS: 条件付きフローマッチングによる高速TTSアーキテクチャ") as demo:
         processed_text = gr.State(value=None)
         processed_text_len = gr.State(value=None)
+        current_language = gr.State(value="en")
 
         with gr.Group():
             with gr.Row():
@@ -462,13 +460,14 @@ def main():
         model_type.change(lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
             load_model_ui,
             inputs=[model_type, text],
-            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, example_row_japanese, length_scale],
+            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, example_row_japanese, length_scale, current_language],
         )
 
         synth_btn.click(
             fn=process_text_gradio,
             inputs=[
                 text,
+                current_language,
             ],
             outputs=[phonetised_text, processed_text, processed_text_len],
             api_name="matcha_tts",

@@ -17,7 +17,7 @@ def validate_args(args):
         "Either text or file must be provided Matcha-T(ea)TTS need sometext to whisk the waveforms."
     )
     assert args.temperature >= 0, "Sampling temperature cannot be negative"
-    assert args.speaking_rate >= 0, "Speaking rate must be greater than 0"
+    assert args.speaking_rate > 0, "Speaking rate must be greater than 0"
     if args.cleaners is None:
         args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
     return args

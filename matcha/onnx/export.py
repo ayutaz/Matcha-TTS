@@ -194,7 +194,7 @@ def main():
 
     if args.quantize:
         try:
-            from onnxruntime.quantization import quantize_dynamic, QuantType
+            from onnxruntime.quantization import QuantType, quantize_dynamic
 
             quantized_path = str(args.output).replace(".onnx", "_int8.onnx")
             print(f"[+] Quantizing model to INT8: {quantized_path}")

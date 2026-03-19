@@ -13,9 +13,18 @@ import types
 import pytest
 
 # ---------------------------------------------------------------------------
-# Mock phonemizer before any matcha.text import, because matcha/text/cleaners.py
-# executes `phonemizer.backend.EspeakBackend(...)` at module level and would
-# fail without espeak-ng installed.
+# Module-level sys.modules mocking (intentional).
+#
+# matcha/text/cleaners.py instantiates ``phonemizer.backend.EspeakBackend(...)``
+# at *import time* (module scope), so the mock **must** be installed before any
+# ``matcha.text`` import occurs.  This rules out ``monkeypatch`` (function- or
+# session-scoped) and ``conftest.py`` autouse fixtures, because Python will have
+# already executed the top-level code in cleaners.py by the time a fixture runs.
+#
+# The mutation is confined to this test module and is harmless to other tests:
+# if phonemizer is genuinely installed the real module will already be in
+# ``sys.modules`` and this block simply overwrites it with a compatible stub for
+# the duration of the process.
 # ---------------------------------------------------------------------------
 _fake_phonemizer = types.ModuleType("phonemizer")
 _fake_backend = types.ModuleType("phonemizer.backend")
