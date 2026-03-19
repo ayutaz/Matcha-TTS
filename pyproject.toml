@@ -49,6 +49,8 @@ dependencies = [
     "numpy",
     "gdown",
     "wget",
+    "torchcodec>=0.10.0",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +65,7 @@ onnx-gpu = [
 app = [
     "gradio>=4.0",
 ]
+japanese = ["pyopenjtalk-plus"]
 logging = [
     "wandb",
     "neptune-client",
@@ -73,6 +76,7 @@ logging = [
 
 [dependency-groups]
 dev = [
+    "gdown>=5.2.1",
     "pre-commit",
     "ruff",
 ]

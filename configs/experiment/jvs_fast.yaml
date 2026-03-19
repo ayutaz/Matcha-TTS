@@ -1,0 +1,33 @@
+# @package _global_
+
+# Fast Japanese multi-speaker TTS training with JVS corpus (100 speakers)
+# Uses pre-computed features and DDP-optimized trainer for maximum throughput
+# To execute: python matcha/train.py experiment=jvs_fast
+
+defaults:
+  - override /data: jvs_precomputed.yaml
+  - override /trainer: ddp_optimized.yaml
+  - override /callbacks: default.yaml
+
+tags: ["jvs", "japanese", "multispeaker", "fast"]
+
+run_name: jvs_fast
+
+model:
+  n_vocab: 55
+  optimizer:
+    lr: 2e-4
+
+compile_model: true
+compile_mode: "default"
+gradient_checkpointing: true
+
+callbacks:
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "loss/val"
+    patience: 20
+    min_delta: 0.001
+    mode: "min"
+    check_finite: true
+    verbose: true

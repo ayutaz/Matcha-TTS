@@ -79,95 +79,48 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        self.log(
-            "step",
-            float(self.global_step),
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-        )
-
-        self.log(
-            "sub_loss/train_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/train_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/train_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-
         total_loss = sum(loss_dict.values())
-        self.log(
-            "loss/train",
-            total_loss,
+
+        self.log_dict(
+            {
+                "sub_loss/train_dur_loss": loss_dict["dur_loss"],
+                "sub_loss/train_prior_loss": loss_dict["prior_loss"],
+                "sub_loss/train_diff_loss": loss_dict["diff_loss"],
+                "loss/train": total_loss,
+            },
             on_step=True,
             on_epoch=True,
             logger=True,
             prog_bar=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         return {"loss": total_loss, "log": loss_dict}
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        self.log(
-            "sub_loss/val_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/val_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/val_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-
         total_loss = sum(loss_dict.values())
-        self.log(
-            "loss/val",
-            total_loss,
+
+        self.log_dict(
+            {
+                "sub_loss/val_dur_loss": loss_dict["dur_loss"],
+                "sub_loss/val_prior_loss": loss_dict["prior_loss"],
+                "sub_loss/val_diff_loss": loss_dict["diff_loss"],
+                "loss/val": total_loss,
+            },
             on_step=True,
             on_epoch=True,
             logger=True,
             prog_bar=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         return total_loss
 
     def on_validation_end(self) -> None:
         if self.trainer.is_global_zero:
+            if self.current_epoch % 10 != 0:
+                return
             one_batch = next(iter(self.trainer.val_dataloaders))
             if self.current_epoch == 0:
                 log.debug("Plotting original samples")
@@ -208,4 +161,6 @@ class BaseLightningClass(LightningModule, ABC):
                 )
 
     def on_before_optimizer_step(self, optimizer):
-        self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})
+        grad_norm_interval = getattr(self, "grad_norm_log_interval", 500)
+        if grad_norm_interval > 0 and self.global_step % grad_norm_interval == 0:
+            self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})

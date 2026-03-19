@@ -29,6 +29,9 @@ args = Namespace(
 
 CURRENTLY_LOADED_MODEL = args.model
 
+# Cache for loaded models: key -> (model, vocoder, denoiser)
+_model_cache = {}
+
 
 def MATCHA_TTS_LOC(x):
     return LOCATION / f"{x}.ckpt"
@@ -38,15 +41,66 @@ def VOCODER_LOC(x):
     return LOCATION / f"{x}"
 
 
+def _warmup_model(m, dev, n_timesteps=10):
+    """Run a warmup pass to trigger CUDA kernel caching and torch.compile tracing.
+
+    Uses realistic input shapes and the actual n_timesteps value to ensure
+    compiled graphs cover the shapes used during real inference.
+    """
+    if dev.type == "cuda":
+        print("[+] Running GPU warmup...")
+        # Use a realistic phoneme sequence length (~50 tokens after intersperse)
+        # to trigger compilation/caching for shapes close to real inference.
+        seq_len = 50
+        with torch.inference_mode():
+            dummy_x = torch.randint(0, 178, (1, seq_len), dtype=torch.long, device=dev)
+            dummy_x_lengths = torch.tensor([seq_len], dtype=torch.long, device=dev)
+            output = m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=n_timesteps)
+        torch.cuda.synchronize()
+        print("[+] Warmup complete.")
+
+
+def _compile_models(m, v, dev):
+    """Apply torch.compile to performance-critical model components on CUDA."""
+    if dev.type == "cuda":
+        print("[+] Compiling model components with torch.compile...")
+        m.encoder = torch.compile(m.encoder, mode="reduce-overhead")
+        m.decoder.estimator = torch.compile(m.decoder.estimator, mode="reduce-overhead")
+        v = torch.compile(v, mode="reduce-overhead")
+        print("[+] Compilation complete.")
+    return m, v
+
+
+def load_model(model_name, vocoder_name):
+    cache_key = (model_name, vocoder_name)
+    if cache_key in _model_cache:
+        print(f"[+] Using cached model: {model_name} + {vocoder_name}")
+        return _model_cache[cache_key]
+
+    m = load_matcha(model_name, MATCHA_TTS_LOC(model_name), device)
+    v, d = load_vocoder(vocoder_name, VOCODER_LOC(vocoder_name), device)
+    m, v = _compile_models(m, v, device)
+    _warmup_model(m, device)
+    _model_cache[cache_key] = (m, v, d)
+    return m, v, d
+
+
 LOGO_URL = "https://shivammehta25.github.io/Matcha-TTS/images/logo.png"
 RADIO_OPTIONS = {
     "マルチスピーカー (VCTK)": {
         "model": "matcha_vctk",
         "vocoder": "hifigan_univ_v1",
+        "language": "en",
     },
     "シングルスピーカー (LJ Speech)": {
         "model": "matcha_ljspeech",
         "vocoder": "hifigan_T2_v1",
+        "language": "en",
+    },
+    "日本語 (JSUT)": {
+        "model": "matcha_jsut",
+        "vocoder": "hifigan_univ_v1",
+        "language": "ja",
     },
 }
 
@@ -58,22 +112,29 @@ assert_model_downloaded(VOCODER_LOC("hifigan_univ_v1"), VOCODER_URLS["hifigan_un
 
 device = get_device(args)
 
-# Load default model
-model = load_matcha(args.model, MATCHA_TTS_LOC(args.model), device)
-vocoder, denoiser = load_vocoder(args.vocoder, VOCODER_LOC(args.vocoder), device)
-
-
-def load_model(model_name, vocoder_name):
-    model = load_matcha(model_name, MATCHA_TTS_LOC(model_name), device)
-    vocoder, denoiser = load_vocoder(vocoder_name, VOCODER_LOC(vocoder_name), device)
-    return model, vocoder, denoiser
+# Load default model (with warmup and caching)
+model, vocoder, denoiser = load_model(args.model, args.vocoder)
 
 
 def load_model_ui(model_type, textbox):
     model_name, vocoder_name = RADIO_OPTIONS[model_type]["model"], RADIO_OPTIONS[model_type]["vocoder"]
+    language = RADIO_OPTIONS[model_type]["language"]
 
     global model, vocoder, denoiser, CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
     if model_name != CURRENTLY_LOADED_MODEL:
+        model_path = MATCHA_TTS_LOC(model_name)
+        if not model_path.exists():
+            gr.Warning(f"モデル '{model_name}' が見つかりません: {model_path}")
+            return (
+                textbox,
+                gr.Button(interactive=False),
+                gr.Slider(visible=False, value=-1),
+                gr.Row(visible=False),
+                gr.Row(visible=False),
+                gr.Row(visible=False),
+                gr.Slider(value=1.0),
+                language,
+            )
         model, vocoder, denoiser = load_model(model_name, vocoder_name)
         CURRENTLY_LOADED_MODEL = model_name
 
@@ -81,11 +142,19 @@ def load_model_ui(model_type, textbox):
         spk_slider = gr.Slider(visible=False, value=-1)
         single_speaker_examples = gr.Row(visible=True)
         multi_speaker_examples = gr.Row(visible=False)
+        japanese_examples = gr.Row(visible=False)
         length_scale = gr.Slider(value=0.95)
+    elif model_name == "matcha_jsut":
+        spk_slider = gr.Slider(visible=False, value=-1)
+        single_speaker_examples = gr.Row(visible=False)
+        multi_speaker_examples = gr.Row(visible=False)
+        japanese_examples = gr.Row(visible=True)
+        length_scale = gr.Slider(value=1.0)
     else:
         spk_slider = gr.Slider(visible=True, value=0)
         single_speaker_examples = gr.Row(visible=False)
         multi_speaker_examples = gr.Row(visible=True)
+        japanese_examples = gr.Row(visible=False)
         length_scale = gr.Slider(value=0.85)
 
     return (
@@ -94,13 +163,16 @@ def load_model_ui(model_type, textbox):
         spk_slider,
         single_speaker_examples,
         multi_speaker_examples,
+        japanese_examples,
         length_scale,
+        language,
     )
 
 
 @torch.inference_mode()
-def process_text_gradio(text):
-    output = process_text(1, text, device)
+def process_text_gradio(text, language):
+    cleaners = ["japanese_cleaners"] if language == "ja" else None
+    output = process_text(1, text, device, cleaners=cleaners, language=language)
     return output["x_phones"][1::2], output["x"], output["x_lengths"]
 
 
@@ -129,7 +201,7 @@ def multispeaker_example_cacher(text, n_timesteps, mel_temp, length_scale, spk):
         model, vocoder, denoiser = load_model("matcha_vctk", "hifigan_univ_v1")
         CURRENTLY_LOADED_MODEL = "matcha_vctk"
 
-    phones, text, text_lengths = process_text_gradio(text)
+    phones, text, text_lengths = process_text_gradio(text, language="en")
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
     return phones, audio, mel_spectrogram
 
@@ -141,7 +213,23 @@ def ljspeech_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
         model, vocoder, denoiser = load_model("matcha_ljspeech", "hifigan_T2_v1")
         CURRENTLY_LOADED_MODEL = "matcha_ljspeech"
 
-    phones, text, text_lengths = process_text_gradio(text)
+    phones, text, text_lengths = process_text_gradio(text, language="en")
+    audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
+    return phones, audio, mel_spectrogram
+
+
+def jsut_example_cacher(text, n_timesteps, mel_temp, length_scale, spk=-1):
+    global CURRENTLY_LOADED_MODEL  # pylint: disable=global-statement
+    if CURRENTLY_LOADED_MODEL != "matcha_jsut":
+        model_path = MATCHA_TTS_LOC("matcha_jsut")
+        if not model_path.exists():
+            gr.Warning("JSUTモデルが見つかりません。先にモデルを学習してください。")
+            return "", None, None
+        global model, vocoder, denoiser  # pylint: disable=global-statement
+        model, vocoder, denoiser = load_model("matcha_jsut", "hifigan_univ_v1")
+        CURRENTLY_LOADED_MODEL = "matcha_jsut"
+
+    phones, text, text_lengths = process_text_gradio(text, language="ja")
     audio, mel_spectrogram = synthesise_mel(text, text_lengths, n_timesteps, mel_temp, length_scale, spk)
     return phones, audio, mel_spectrogram
 
@@ -167,6 +255,7 @@ def main():
     with gr.Blocks(title="🍵 Matcha-TTS: 条件付きフローマッチングによる高速TTSアーキテクチャ") as demo:
         processed_text = gr.State(value=None)
         processed_text_len = gr.State(value=None)
+        current_language = gr.State(value="en")
 
         with gr.Group():
             with gr.Row():
@@ -327,16 +416,58 @@ def main():
                 label="マルチスピーカー サンプル",
             )
 
+        with gr.Row(visible=False) as example_row_japanese:
+            gr.Examples(
+                examples=[
+                    [
+                        "ようこそ、音声合成の世界へ。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "今日はとても良い天気ですね。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "条件付きフローマッチングを用いた高速な音声合成システムです。",
+                        50,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "吾輩は猫である。名前はまだ無い。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                    [
+                        "東京は日本の首都であり、世界最大の都市圏の一つです。",
+                        10,
+                        0.677,
+                        1.0,
+                    ],
+                ],
+                fn=jsut_example_cacher,
+                inputs=[text, n_timesteps, mel_temp, length_scale],
+                outputs=[phonetised_text, audio, mel_spectrogram],
+                cache_examples=False,
+                label="日本語 サンプル",
+            )
+
         model_type.change(lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
             load_model_ui,
             inputs=[model_type, text],
-            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, length_scale],
+            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, example_row_japanese, length_scale, current_language],
         )
 
         synth_btn.click(
             fn=process_text_gradio,
             inputs=[
                 text,
+                current_language,
             ],
             outputs=[phonetised_text, processed_text, processed_text_len],
             api_name="matcha_tts",

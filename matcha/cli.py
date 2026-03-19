@@ -2,6 +2,7 @@ import argparse
 import datetime as dt
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -45,15 +46,17 @@ def plot_spectrogram_to_numpy(spectrogram, filename):
     plt.savefig(filename)
 
 
-def process_text(i: int, text: str, device: torch.device):
+def process_text(i: int, text: str, device: torch.device, cleaners=None, language="en"):
+    if cleaners is None:
+        cleaners = ["japanese_cleaners"] if language == "ja" else ["english_cleaners2"]
     print(f"[{i}] - Input text: {text}")
     x = torch.tensor(
-        intersperse(text_to_sequence(text, ["english_cleaners2"])[0], 0),
+        intersperse(text_to_sequence(text, cleaners, language=language)[0], 0),
         dtype=torch.long,
         device=device,
     )[None]
     x_lengths = torch.tensor([x.shape[-1]], dtype=torch.long, device=device)
-    x_phones = sequence_to_text(x.squeeze(0).tolist())
+    x_phones = sequence_to_text(x.squeeze(0).tolist(), language=language)
     print(f"[{i}] - Phonetised text: {x_phones[1::2]}")
 
     return {"x_orig": text, "x": x, "x_lengths": x_lengths, "x_phones": x_phones}
@@ -246,7 +249,7 @@ def cli():
         default=None,
         help="change the speaking rate, a higher value means slower speaking rate (default: 1.0)",
     )
-    parser.add_argument("--steps", type=int, default=10, help="Number of ODE steps  (default: 10)")
+    parser.add_argument("--steps", type=int, default=5, help="Number of ODE steps  (default: 5)")
     parser.add_argument("--cpu", action="store_true", help="Use CPU for inference (default: use GPU if available)")
     parser.add_argument(
         "--denoiser_strength",
@@ -264,12 +267,30 @@ def cli():
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size only useful when --batched (default: 32)"
     )
+    parser.add_argument(
+        "--language",
+        type=str,
+        default=None,
+        choices=["en", "ja"],
+        help="Language for text processing (default: auto-detect from model)",
+    )
+    parser.add_argument(
+        "--cleaners",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Text cleaners to use (default: auto-selected based on --language)",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Use aggressive 'max-autotune' compilation mode instead of default 'reduce-overhead' (CUDA only)",
+    )
 
     args = parser.parse_args()
 
     args = validate_args(args)
     device = get_device(args)
-    print_config(args)
     paths = assert_required_models_available(args)
 
     if args.checkpoint_path is not None:
@@ -279,6 +300,37 @@ def cli():
 
     model = load_matcha(args.model, paths["matcha"], device)
     vocoder, denoiser = load_vocoder(args.vocoder, paths["vocoder"], device)
+
+    # Compile model and vocoder for faster inference on CUDA
+    if device.type == "cuda":
+        compile_mode = "max-autotune" if args.compile else "reduce-overhead"
+        print(f"[+] Compiling model and vocoder with torch.compile (mode={compile_mode})...")
+        model.encoder = torch.compile(model.encoder, mode=compile_mode)
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+        vocoder = torch.compile(vocoder, mode=compile_mode)
+
+    # GPU warmup to trigger CUDA kernel caching
+    if device.type == "cuda":
+        print("[+] Running GPU warmup...")
+        with torch.inference_mode():
+            dummy_x = torch.zeros(1, 10, dtype=torch.long, device=device)
+            dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=device)
+            model.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2)
+        print("[+] Warmup complete.")
+
+    # Auto-detect language from model if not explicitly set
+    if args.language is None:
+        if hasattr(model, "n_vocab") and model.n_vocab == 52:
+            args.language = "ja"
+            print("[*] Auto-detected language: Japanese (n_vocab=52)")
+        else:
+            args.language = "en"
+
+    # Set cleaners if not explicitly provided
+    if args.cleaners is None:
+        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
+
+    print_config(args)
 
     texts = get_texts(args)
 
@@ -316,13 +368,29 @@ def batched_collate_fn(batch):
 def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
-    processed_text = [process_text(i, text, "cpu") for i, text in enumerate(texts)]
+    with ThreadPoolExecutor(max_workers=min(8, len(texts))) as executor:
+        processed_text = list(executor.map(
+            process_text,
+            range(len(texts)),
+            texts,
+            ["cpu"] * len(texts),
+            [args.cleaners] * len(texts),
+            [args.language] * len(texts),
+        ))
+
+    # Sort by sequence length to reduce padding waste, track original indices
+    sorted_indices = sorted(range(len(processed_text)), key=lambda k: processed_text[k]["x"].shape[-1])
+    sorted_processed_text = [processed_text[idx] for idx in sorted_indices]
+
     dataloader = torch.utils.data.DataLoader(
-        BatchedSynthesisDataset(processed_text),
+        BatchedSynthesisDataset(sorted_processed_text),
         batch_size=args.batch_size,
         collate_fn=batched_collate_fn,
         num_workers=8,
     )
+
+    # Process batches; use global_idx to map back to original indices
+    global_idx = 0
     for i, batch in enumerate(dataloader):
         i = i + 1
         start_t = dt.datetime.now()
@@ -344,11 +412,14 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
         total_rtf.append(output["rtf"])
         total_rtf_w.append(rtf_w)
         for j in range(output["mel"].shape[0]):
-            base_name = f"utterance_{j:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{j:03d}"
             length = output["mel_lengths"][j]
             new_dict = {"mel": output["mel"][j][:, :length], "waveform": output["waveform"][j][: length * 256]}
+            # Map back to original index for naming
+            orig_idx = sorted_indices[global_idx]
+            base_name = f"utterance_{orig_idx:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{orig_idx:03d}"
             location = save_to_folder(base_name, new_dict, args.output_folder)
-            print(f"[🍵-{j}] Waveform saved: {location}")
+            print(f"[🍵-{orig_idx}] Waveform saved: {location}")
+            global_idx += 1
 
     print("".join(["="] * 100))
     print(f"[🍵] Average Matcha-TTS RTF: {np.mean(total_rtf):.4f} ± {np.std(total_rtf)}")
@@ -365,7 +436,7 @@ def unbatched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
 
         print("".join(["="] * 100))
         text = text.strip()
-        text_processed = process_text(i, text, device)
+        text_processed = process_text(i, text, device, cleaners=args.cleaners, language=args.language)
 
         print(f"[🍵] Whisking Matcha-T(ea)TS for: {i}")
         start_t = dt.datetime.now()
@@ -399,6 +470,8 @@ def print_config(args):
     print("[!] Configurations: ")
     print(f"\t- Model: {args.model}")
     print(f"\t- Vocoder: {args.vocoder}")
+    print(f"\t- Language: {args.language}")
+    print(f"\t- Cleaners: {args.cleaners}")
     print(f"\t- Temperature: {args.temperature}")
     print(f"\t- Speaking rate: {args.speaking_rate}")
     print(f"\t- Number of ODE steps: {args.steps}")
@@ -409,6 +482,9 @@ def get_device(args):
     if torch.cuda.is_available() and not args.cpu:
         print("[+] GPU Available! Using GPU")
         device = torch.device("cuda")
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     else:
         print("[-] GPU not available or forced CPU run! Using CPU")
         device = torch.device("cpu")
