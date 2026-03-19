@@ -5,7 +5,7 @@ strategy:
   _target_: lightning.pytorch.strategies.DDPStrategy
   find_unused_parameters: false
   gradient_as_bucket_view: true
-  static_graph: true
+  static_graph: false
   bucket_cap_mb: 100
   broadcast_buffers: false
 
@@ -17,5 +17,5 @@ sync_batchnorm: true
 # reduce validation frequency to cut overhead on multi-GPU runs
 check_val_every_n_epoch: 10
 
-accumulate_grad_batches: 2
+accumulate_grad_batches: 1
 gradient_clip_val: 1.0

@@ -144,6 +144,26 @@ class PrecomputedTextMelDataModule(LightningDataModule):
         )
 
     def train_dataloader(self):
+        # BucketBatchSampler is incompatible with Lightning's DistributedSampler
+        # replacement in DDP mode.  Fall back to standard shuffled DataLoader
+        # when running under a distributed strategy so that Lightning can inject
+        # its own DistributedSampler transparently.
+        trainer = self.trainer
+        is_distributed = trainer is not None and getattr(trainer, "num_devices", 1) > 1
+
+        if is_distributed:
+            return DataLoader(
+                dataset=self.trainset,
+                batch_size=self.hparams.batch_size,
+                num_workers=self.hparams.num_workers,
+                pin_memory=self.hparams.pin_memory,
+                shuffle=True,
+                drop_last=True,
+                collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+                persistent_workers=True,
+                prefetch_factor=8,
+            )
+
         bucket_sampler = BucketBatchSampler(
             file_sizes=self.trainset.get_file_sizes(),
             batch_size=self.hparams.batch_size,
