@@ -74,7 +74,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     if cfg.get("compile_model", False):
-        compile_mode = cfg.get("compile_mode", "reduce-overhead")
+        compile_mode = cfg.get("compile_mode", "default")
         log.info("Compiling encoder and decoder with torch.compile (mode=%s)...", compile_mode)
         model.encoder = torch.compile(model.encoder, mode=compile_mode)
         model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)

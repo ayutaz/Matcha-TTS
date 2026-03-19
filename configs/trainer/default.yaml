@@ -7,8 +7,8 @@ max_epochs: -1
 accelerator: gpu
 devices: [0]
 
-# mixed precision for extra speed-up
-precision: 16-mixed
+# FP32 precision (FP16 can be slower on V100/T4 due to cast overhead)
+precision: 32-true
 
 # perform a validation loop every N training epochs
 check_val_every_n_epoch: 5

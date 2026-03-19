@@ -91,9 +91,9 @@ class BaseLightningClass(LightningModule, ABC):
             on_step=True,
             on_epoch=True,
             logger=True,
+            prog_bar=True,
             sync_dist=False,
         )
-        self.log("loss/train", total_loss, prog_bar=True, logger=False, sync_dist=False)
 
         return {"loss": total_loss, "log": loss_dict}
 
@@ -111,9 +111,9 @@ class BaseLightningClass(LightningModule, ABC):
             on_step=True,
             on_epoch=True,
             logger=True,
+            prog_bar=True,
             sync_dist=False,
         )
-        self.log("loss/val", total_loss, prog_bar=True, logger=False, sync_dist=False)
 
         return total_loss
 

@@ -19,13 +19,13 @@ model:
     lr: 2e-4
 
 compile_model: true
-compile_mode: "reduce-overhead"
+compile_mode: "default"
 gradient_checkpointing: true
 
 callbacks:
   early_stopping:
     _target_: lightning.pytorch.callbacks.EarlyStopping
-    monitor: "loss"
+    monitor: "loss/val"
     patience: 20
     min_delta: 0.001
     mode: "min"
