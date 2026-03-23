@@ -1,8 +1,8 @@
 import datetime as dt
 import math
-import random
 
 import torch
+import torch.nn.functional as F
 
 import matcha.utils.monotonic_align as monotonic_align  # pylint: disable=consider-using-from-import
 from matcha import utils
@@ -200,7 +200,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
 
         # Compute loss between predicted log-scaled durations and those obtained from MAS
         # refered to as prior loss in the paper
-        logw_ = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
+        logw_ = torch.log(1e-6 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
         dur_loss = duration_loss(logw, logw_, x_lengths)
 
         # Cut a small segment of mel-spectrogram in order to increase batch size
@@ -208,12 +208,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         #   - Do not need this hack for Matcha-TTS, but it works with it as well
         if not isinstance(out_size, type(None)):
             max_offset = (y_lengths - out_size).clamp(0)
-            offset_ranges = list(zip([0] * max_offset.shape[0], max_offset.cpu().numpy()))
-            out_offset = torch.tensor(
-                [random.choice(range(start, end)) if end > start else 0 for start, end in offset_ranges],
-                dtype=torch.long,
-                device=y_lengths.device,
-            )
+            out_offset = torch.randint(
+                0, 2**63 - 1, (max_offset.shape[0],), dtype=torch.long, device=max_offset.device
+            ) % max_offset.clamp(min=1)
             attn_cut = torch.empty(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
             y_cut = torch.empty(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
 
@@ -239,8 +236,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=cond)
 
         if self.prior_loss:
-            prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + LOG_2PI) * y_mask)
-            prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
+            masked_n = torch.sum(y_mask) * self.n_feats
+            prior_loss = 0.5 * F.mse_loss(y * y_mask, mu_y * y_mask, reduction="sum") / masked_n
         else:
             prior_loss = 0
 

@@ -1,7 +1,7 @@
 _target_: matcha.data.precomputed_datamodule.PrecomputedTextMelDataModule
 name: jvs_precomputed
-train_pt_dir: data/jvs_precomputed/train
-val_pt_dir: data/jvs_precomputed/val
+train_pt_dir: /dev/shm/jvs_precomputed/train
+val_pt_dir: /dev/shm/jvs_precomputed/val
 batch_size: 32
 num_workers: 8
 pin_memory: True

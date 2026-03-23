@@ -134,8 +134,10 @@ class BASECFM(torch.nn.Module, ABC):
         """
         b, _, t_len = mu.shape
 
-        # random timestep
-        t = torch.rand([b, 1, 1], device=mu.device, dtype=mu.dtype)
+        # random timestep (logit-normal distribution: concentrates sampling
+        # around t≈0.5 where the flow is hardest to learn)
+        u = torch.randn([b, 1, 1], device=mu.device, dtype=mu.dtype)
+        t = torch.sigmoid(u)
         # sample noise p(x_0) — ensure dtype matches mu
         z = torch.randn_like(x1, dtype=mu.dtype)
 

@@ -399,10 +399,7 @@ class Decoder(nn.Module):
         masks = [mask]
         for resnet, transformer_blocks, downsample in self.down_blocks:
             mask_down = masks[-1]
-            if use_ckpt:
-                x = grad_checkpoint(resnet, x, mask_down, t, use_reentrant=False)
-            else:
-                x = resnet(x, mask_down, t)
+            x = resnet(x, mask_down, t)
             x = x.transpose(1, 2)
             mask_down = mask_down.squeeze(1)
             for transformer_block in transformer_blocks:
@@ -432,10 +429,7 @@ class Decoder(nn.Module):
         mask_mid = masks[-1]
 
         for resnet, transformer_blocks in self.mid_blocks:
-            if use_ckpt:
-                x = grad_checkpoint(resnet, x, mask_mid, t, use_reentrant=False)
-            else:
-                x = resnet(x, mask_mid, t)
+            x = resnet(x, mask_mid, t)
             x = x.transpose(1, 2)
             mask_mid = mask_mid.squeeze(1)
             for transformer_block in transformer_blocks:
@@ -460,10 +454,7 @@ class Decoder(nn.Module):
 
         for resnet, transformer_blocks, upsample in self.up_blocks:
             mask_up = masks.pop()
-            if use_ckpt:
-                x = grad_checkpoint(resnet, torch.cat([x, hiddens.pop()], dim=1), mask_up, t, use_reentrant=False)
-            else:
-                x = resnet(torch.cat([x, hiddens.pop()], dim=1), mask_up, t)
+            x = resnet(torch.cat([x, hiddens.pop()], dim=1), mask_up, t)
             x = x.transpose(1, 2)
             mask_up = mask_up.squeeze(1)
             for transformer_block in transformer_blocks:

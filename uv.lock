@@ -1944,6 +1944,15 @@ wheels = [
 ]
 
 [[package]]
+name = "gh"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gitpython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/80/c1e50b9b09a944b9b5f160d689fbf637b543bb8391019df1019986b8d397/gh-0.0.4.tar.gz", hash = "sha256:db58819885a95807f963f8eb798e1d0df22ded41d9a80d5c3dc1fc8d695f1e1b", size = 2192, upload-time = "2018-11-06T11:10:50.685Z" }
+
+[[package]]
 name = "gitdb"
 version = "4.0.12"
 source = { registry = "https://pypi.org/simple" }
@@ -3186,6 +3195,7 @@ dependencies = [
     { name = "diffusers" },
     { name = "einops" },
     { name = "gdown" },
+    { name = "gh" },
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
@@ -3260,6 +3270,7 @@ requires-dist = [
     { name = "diffusers" },
     { name = "einops" },
     { name = "gdown" },
+    { name = "gh", specifier = ">=0.0.4" },
     { name = "gradio", marker = "extra == 'app'", specifier = ">=4.0" },
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },

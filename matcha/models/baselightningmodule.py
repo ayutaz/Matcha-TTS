@@ -3,10 +3,10 @@ This is a base lightning module that can be used to train a model.
 The benefit of this abstraction is that all the logic outside of model definition can be reused for different models.
 """
 
-import inspect
 from abc import ABC
 from typing import Any, Dict
 
+import hydra
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
@@ -30,25 +30,13 @@ class BaseLightningClass(LightningModule, ABC):
 
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
-        if self.hparams.scheduler not in (None, {}):
-            scheduler_args = {}
-            # Manage last epoch for exponential schedulers
-            if "last_epoch" in inspect.signature(self.hparams.scheduler.scheduler).parameters:
-                if hasattr(self, "ckpt_loaded_epoch"):
-                    current_epoch = self.ckpt_loaded_epoch - 1
-                else:
-                    current_epoch = -1
-
-            scheduler_args.update({"optimizer": optimizer})
-            scheduler = self.hparams.scheduler.scheduler(**scheduler_args)
-            scheduler.last_epoch = current_epoch
+        if getattr(self.hparams, "scheduler", None) is not None:
+            scheduler = self.hparams.scheduler(optimizer=optimizer)
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": self.hparams.scheduler.lightning_args.interval,
-                    "frequency": self.hparams.scheduler.lightning_args.frequency,
-                    "name": "learning_rate",
+                    "interval": "epoch",
                 },
             }
 
@@ -79,7 +67,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        total_loss = sum(loss_dict.values())
+        total_loss = loss_dict["dur_loss"] + 0.5 * loss_dict["prior_loss"] + loss_dict["diff_loss"]
 
         self.log_dict(
             {
@@ -99,7 +87,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        total_loss = sum(loss_dict.values())
+        total_loss = loss_dict["dur_loss"] + 0.5 * loss_dict["prior_loss"] + loss_dict["diff_loss"]
 
         self.log_dict(
             {
