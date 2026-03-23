@@ -117,7 +117,20 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+        ckpt_path = cfg.get("ckpt_path")
+        if ckpt_path:
+            # Try full resume; fall back to weights-only load if checkpoint lacks optimizer state
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            if "optimizer_states" in ckpt:
+                log.info(f"Full resume from {ckpt_path}")
+                trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt_path, weights_only=False)
+            else:
+                log.info(f"Weights-only checkpoint detected. Loading model weights from {ckpt_path}")
+                model.load_state_dict(ckpt["state_dict"])
+                del ckpt
+                trainer.fit(model=model, datamodule=datamodule)
+        else:
+            trainer.fit(model=model, datamodule=datamodule)
 
     train_metrics = trainer.callback_metrics
 
