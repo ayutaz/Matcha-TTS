@@ -42,6 +42,7 @@ class TextMelDataModule(LightningDataModule):
         data_statistics,
         seed,
         load_durations,
+        language="en",
     ):
         super().__init__()
 
@@ -72,6 +73,7 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
+            language=getattr(self.hparams, 'language', 'en'),
         )
         self.validset = TextMelDataset(  # pylint: disable=attribute-defined-outside-init
             self.hparams.valid_filelist_path,
@@ -88,19 +90,30 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
+            language=getattr(self.hparams, 'language', 'en'),
         )
 
     def train_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.trainset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
+            drop_last=True,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            **kwargs,
         )
 
     def val_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.validset,
             batch_size=self.hparams.batch_size,
@@ -108,6 +121,7 @@ class TextMelDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
             collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            **kwargs,
         )
 
     def teardown(self, stage: Optional[str] = None):
@@ -140,6 +154,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         data_parameters=None,
         seed=None,
         load_durations=False,
+        language="en",
     ):
         self.filepaths_and_text = parse_filelist(filelist_path)
         self.n_spks = n_spks
@@ -153,6 +168,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.f_min = f_min
         self.f_max = f_max
         self.load_durations = load_durations
+        self.language = language
 
         if data_parameters is not None:
             self.data_parameters = data_parameters
@@ -214,7 +230,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         return mel
 
     def get_text(self, text, add_blank=True):
-        text_norm, cleaned_text = text_to_sequence(text, self.cleaners)
+        text_norm, cleaned_text = text_to_sequence(text, self.cleaners, language=self.language)
         if self.add_blank:
             text_norm = intersperse(text_norm, 0)
         text_norm = torch.IntTensor(text_norm)
@@ -231,12 +247,19 @@ class TextMelDataset(torch.utils.data.Dataset):
 class TextMelBatchCollate:
     def __init__(self, n_spks):
         self.n_spks = n_spks
+        self._len_compat_cache: Dict[int, int] = {}
+
+    def _fix_len_compat(self, length):
+        """Cached version of fix_len_compatibility."""
+        if length not in self._len_compat_cache:
+            self._len_compat_cache[length] = fix_len_compatibility(length)
+        return self._len_compat_cache[length]
 
     def __call__(self, batch):
         B = len(batch)
-        y_max_length = max([item["y"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
-        x_max_length = max([item["x"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
+        y_max_length = max(item["y"].shape[-1] for item in batch)
+        y_max_length = self._fix_len_compat(y_max_length)
+        x_max_length = max(item["x"].shape[-1] for item in batch)
         n_feats = batch[0]["y"].shape[-2]
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)

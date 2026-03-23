@@ -1,5 +1,7 @@
 """from https://github.com/jaywalnut310/glow-tts"""
 
+import math
+
 import numpy as np
 import torch
 
@@ -12,12 +14,14 @@ def sequence_mask(length, max_length=None):
 
 
 def fix_len_compatibility(length, num_downsamplings_in_unet=2):
-    factor = torch.scalar_tensor(2).pow(num_downsamplings_in_unet)
-    length = (length / factor).ceil() * factor
-    if not torch.onnx.is_in_onnx_export():
-        return length.int().item()
-    else:
+    factor = 2 ** num_downsamplings_in_unet
+    if isinstance(length, torch.Tensor):
+        length = (length.float() / factor).ceil() * factor
+        if not torch.onnx.is_in_onnx_export():
+            return length.int().item()
         return length
+    else:
+        return int(math.ceil(length / factor) * factor)
 
 
 def convert_pad_shape(pad_shape):
@@ -42,7 +46,7 @@ def generate_path(duration, mask):
 
 
 def duration_loss(logw, logw_, lengths):
-    loss = torch.sum((logw - logw_) ** 2) / torch.sum(lengths)
+    loss = torch.nn.functional.huber_loss(logw, logw_, reduction="sum", delta=1.0) / torch.sum(lengths)
     return loss
 
 

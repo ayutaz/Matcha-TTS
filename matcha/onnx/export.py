@@ -1,4 +1,5 @@
 import argparse
+import logging
 import random
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from lightning import LightningModule
 
 from matcha.cli import VOCODER_URLS, load_matcha, load_vocoder
 
-DEFAULT_OPSET = 15
+logger = logging.getLogger(__name__)
+
+DEFAULT_OPSET = 17
 
 SEED = 1234
 random.seed(SEED)
@@ -60,12 +63,12 @@ def get_exportable_module(matcha, vocoder, n_timesteps):
     return model, output_names
 
 
-def get_inputs(is_multi_speaker):
+def get_inputs(is_multi_speaker, n_vocab=178):
     """
     Create dummy inputs for tracing
     """
     dummy_input_length = 50
-    x = torch.randint(low=0, high=20, size=(1, dummy_input_length), dtype=torch.long)
+    x = torch.randint(low=0, high=n_vocab, size=(1, dummy_input_length), dtype=torch.long)
     x_lengths = torch.LongTensor([dummy_input_length])
 
     # Scales
@@ -113,7 +116,8 @@ def main():
         default=None,
         help="Vocoder checkpoint to embed  in the ONNX graph for an `e2e` like experience",
     )
-    parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 15")
+    parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 17)")
+    parser.add_argument("--quantize", default=False, action="store_true", help="Apply INT8 dynamic quantization after export")
 
     args = parser.parse_args()
 
@@ -132,8 +136,9 @@ def main():
         vocoder = None
 
     is_multi_speaker = matcha.n_spks > 1
+    n_vocab = matcha.n_vocab
 
-    dummy_input, input_names = get_inputs(is_multi_speaker)
+    dummy_input, input_names = get_inputs(is_multi_speaker, n_vocab=n_vocab)
     model, output_names = get_exportable_module(matcha, vocoder, args.n_timesteps)
 
     # Set dynamic shape for inputs/outputs
@@ -175,6 +180,32 @@ def main():
         do_constant_folding=True,
     )
     print(f"[🍵] ONNX model exported to  {args.output}")
+
+    try:
+        import onnx
+        from onnxruntime.transformers import optimizer as ort_optimizer  # noqa: F401
+
+        # Basic optimization
+        onnx_model = onnx.load(args.output)
+        onnx.checker.check_model(onnx_model)
+        logger.info("ONNX model validation passed")
+    except ImportError:
+        logger.info("onnx package not available, skipping validation")
+
+    if args.quantize:
+        try:
+            from onnxruntime.quantization import QuantType, quantize_dynamic
+
+            quantized_path = str(args.output).replace(".onnx", "_int8.onnx")
+            print(f"[+] Quantizing model to INT8: {quantized_path}")
+            quantize_dynamic(
+                str(args.output),
+                quantized_path,
+                weight_type=QuantType.QInt8,
+            )
+            print(f"[+] Quantized model saved to: {quantized_path}")
+        except ImportError:
+            print("[!] onnxruntime-quantization not available. Install with: uv add onnxruntime")
 
 
 if __name__ == "__main__":
