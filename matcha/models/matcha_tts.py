@@ -194,11 +194,14 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             attn = generate_path(durations.squeeze(1), attn_mask.squeeze(1))
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
-            with torch.no_grad():
+            # Disable autocast: MAS requires FP32 for numerical stability of log-prior matmul
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=False):
+                mu_x_f = mu_x.float()
+                y_f = y.float()
                 const = -0.5 * LOG_2PI * self.n_feats
-                y_square = -0.5 * torch.sum(y**2, 1, keepdim=True)
-                y_mu_double = torch.matmul(mu_x.transpose(1, 2), y)
-                mu_square = -0.5 * torch.sum(mu_x**2, 1).unsqueeze(-1)
+                y_square = -0.5 * torch.sum(y_f**2, 1, keepdim=True)
+                y_mu_double = torch.matmul(mu_x_f.transpose(1, 2), y_f)
+                mu_square = -0.5 * torch.sum(mu_x_f**2, 1).unsqueeze(-1)
                 log_prior = y_square + y_mu_double + mu_square + const
 
                 attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
@@ -206,8 +209,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
 
         # Compute loss between predicted log-scaled durations and those obtained from MAS
         # refered to as prior loss in the paper
+        # FP32 cast: (logw - logw_)**2 can overflow in FP16
         logw_ = torch.log(1e-6 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
-        dur_loss = duration_loss(logw, logw_, x_lengths)
+        dur_loss = duration_loss(logw.float(), logw_.float(), x_lengths)
 
         # Cut a small segment of mel-spectrogram in order to increase batch size
         #   - "Hack" taken from Grad-TTS, in case of Grad-TTS, we cannot train batch size 32 on a 24GB GPU without it
@@ -243,7 +247,10 @@ class MatchaTTS(BaseLightningClass):  # 🍵
 
         if self.prior_loss:
             masked_n = torch.sum(y_mask) * self.n_feats
-            prior_loss = 0.5 * (F.mse_loss(y * y_mask, mu_y * y_mask, reduction="sum") / masked_n + LOG_2PI)
+            # FP32 cast: reduction="sum" on large tensors can overflow FP16
+            prior_loss = 0.5 * (
+                F.mse_loss(y.float() * y_mask, mu_y.float() * y_mask, reduction="sum") / masked_n + LOG_2PI
+            )
         else:
             prior_loss = 0
 

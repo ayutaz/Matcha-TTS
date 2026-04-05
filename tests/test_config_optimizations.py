@@ -38,8 +38,24 @@ class TestJvsFastConfig:
         assert jvs_fast_config["trainer"]["max_epochs"] == 500
 
     def test_check_val_every_n_epoch(self, jvs_fast_config):
-        """check_val_every_n_epoch should be 50 to reduce DDP sync overhead."""
-        assert jvs_fast_config["trainer"]["check_val_every_n_epoch"] == 50
+        """check_val_every_n_epoch should be 10 for effective early stopping."""
+        assert jvs_fast_config["trainer"]["check_val_every_n_epoch"] == 10
+
+    def test_precision_16_mixed(self, jvs_fast_config):
+        """precision should be 16-mixed for FP16 mixed precision training."""
+        assert jvs_fast_config["trainer"]["precision"] == "16-mixed"
+
+    def test_scheduler_t_max(self, jvs_fast_config):
+        """T_max should match actual total steps (~48000)."""
+        assert jvs_fast_config["model"]["scheduler"]["T_max"] == 48000
+
+    def test_early_stopping_patience(self, jvs_fast_config):
+        """patience should be 15 (effective 150 epochs with check_every=10)."""
+        assert jvs_fast_config["callbacks"]["early_stopping"]["patience"] == 15
+
+    def test_ema_early_start(self, jvs_fast_config):
+        """EMA should start at epoch 3 (after warmup)."""
+        assert jvs_fast_config["callbacks"]["ema"]["update_starting_at_epoch"] == 3
 
 
 class TestDdpOptimizedConfig:

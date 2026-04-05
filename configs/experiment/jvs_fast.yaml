@@ -15,11 +15,13 @@ run_name: jvs_fast
 
 model:
   n_vocab: 55
+  optimizer:
+    fused: false  # fused=true is incompatible with FP16 mixed precision + gradient clipping
   scheduler:
     type: warmup_cosine_safe
     warmup_steps: 500
     start_factor: 0.1
-    T_max: 20000
+    T_max: 48000  # Match actual total steps (500 epochs × ~96 steps/epoch)
     eta_min: 5e-5
 
 compile_model: true
@@ -31,7 +33,7 @@ callbacks:
   early_stopping:
     _target_: lightning.pytorch.callbacks.EarlyStopping
     monitor: "loss/val"
-    patience: 10
+    patience: 15  # 15 × 10 epochs = 150 epochs of no improvement triggers stop
     min_delta: 0.001
     mode: "min"
     check_finite: true
@@ -40,9 +42,11 @@ callbacks:
     _target_: lightning.pytorch.callbacks.EMAWeightAveraging
     decay: 0.9995
     update_every_n_steps: 1
-    update_starting_at_epoch: 10
+    update_starting_at_epoch: 3  # Start after warmup (500 steps ≈ epoch 5)
 
 trainer:
   max_epochs: 500
-  # DDP待機時間を削減（早期段階のバリデーション頻度を下げる）
-  check_val_every_n_epoch: 50
+  # バリデーション頻度: early stoppingを有効に機能させる
+  check_val_every_n_epoch: 10
+  # FP16混合精度: encoder/decoderはFP16、loss計算はFP32（明示キャスト済み）
+  precision: "16-mixed"
