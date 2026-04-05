@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from matcha.utils.monotonic_align import maximum_path, maximum_path_pytorch
+from matcha.utils.monotonic_align import maximum_path, maximum_path_pytorch, maximum_path_pytorch_original
 from matcha.utils.monotonic_align.core import maximum_path_c
 
 
@@ -298,3 +298,199 @@ class TestPytorchVsCython:
         path = maximum_path(v, m)
         assert path.shape == v.shape
         assert path.device.type == "cpu"
+
+
+# ---------------------------------------------------------------------------
+# Tests: optimized vs original PyTorch implementation
+# ---------------------------------------------------------------------------
+
+
+def _run_pytorch_original(value, mask):
+    """Run the original (backup) PyTorch implementation on CPU."""
+    value = (value * mask).clone()
+    return maximum_path_pytorch_original(value, mask)
+
+
+class TestOptimizedVsOriginal:
+    """Verify the optimized implementation produces identical results to the original."""
+
+    def test_basic(self):
+        torch.manual_seed(42)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    def test_square(self):
+        torch.manual_seed(7)
+        v = torch.randn(3, 4, 4)
+        m = torch.ones(3, 4, 4)
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    def test_single_phoneme(self):
+        torch.manual_seed(11)
+        v = torch.randn(2, 1, 5)
+        m = torch.ones(2, 1, 5)
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    def test_masked_different_lengths(self):
+        torch.manual_seed(99)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        m[0, 3:, :] = 0
+        m[0, :, 7:] = 0
+        m[1, 4:, :] = 0
+        m[1, :, 8:] = 0
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    def test_larger_batch(self):
+        torch.manual_seed(123)
+        v = torch.randn(8, 10, 20)
+        m = torch.ones(8, 10, 20)
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    def test_large_batch_size(self):
+        """Test with a large batch to stress batch-parallel vectorization."""
+        torch.manual_seed(300)
+        v = torch.randn(32, 8, 16)
+        m = torch.ones(32, 8, 16)
+        assert torch.equal(_run_pytorch_original(v, m), _run_pytorch(v, m))
+
+    @pytest.mark.parametrize("seed", list(range(50)))
+    def test_fuzz(self, seed):
+        """Fuzz: random shapes must match the original implementation."""
+        import random
+
+        rng = random.Random(seed)
+        torch.manual_seed(seed)
+        b = rng.randint(1, 8)
+        tx = rng.randint(1, 15)
+        ty = rng.randint(tx, tx * 4)
+        v = torch.randn(b, tx, ty)
+        m = torch.ones(b, tx, ty)
+        orig = _run_pytorch_original(v, m)
+        optim = _run_pytorch(v, m)
+        assert torch.equal(orig, optim), (
+            f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
+        )
+
+    @pytest.mark.parametrize("seed", list(range(20)))
+    def test_fuzz_with_masks(self, seed):
+        """Fuzz with variable-length masks per sample."""
+        import random
+
+        rng = random.Random(seed + 1000)
+        torch.manual_seed(seed + 1000)
+        b = rng.randint(1, 8)
+        tx_max = rng.randint(2, 12)
+        ty_max = rng.randint(tx_max, tx_max * 3)
+        v = torch.randn(b, tx_max, ty_max)
+        m = torch.ones(b, tx_max, ty_max)
+        for i in range(b):
+            tx_i = rng.randint(1, tx_max)
+            ty_i = rng.randint(tx_i, ty_max)
+            m[i, tx_i:, :] = 0
+            m[i, :, ty_i:] = 0
+        orig = _run_pytorch_original(v, m)
+        optim = _run_pytorch(v, m)
+        assert torch.equal(orig, optim), (
+            f"Mismatch at seed={seed}, b={b}, tx_max={tx_max}, ty_max={ty_max}"
+        )
+
+
+class TestEdgeCases:
+    """Edge-case tests for the optimized implementation."""
+
+    def test_batch_size_one(self):
+        """Single sample in batch."""
+        torch.manual_seed(42)
+        v = torch.randn(1, 5, 10)
+        m = torch.ones(1, 5, 10)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_sequence_length_one(self):
+        """Both t_x and t_y are 1."""
+        v = torch.randn(1, 1, 1)
+        m = torch.ones(1, 1, 1)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_t_x_one_t_y_large(self):
+        """Single phoneme mapped to many mel frames."""
+        torch.manual_seed(55)
+        v = torch.randn(2, 1, 20)
+        m = torch.ones(2, 1, 20)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_t_x_equals_t_y(self):
+        """Square alignment matrix — diagonal path."""
+        torch.manual_seed(77)
+        v = torch.randn(4, 8, 8)
+        m = torch.ones(4, 8, 8)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_long_sequences(self):
+        """Longer sequences (t_x=50, t_y=200) to check correctness at scale."""
+        torch.manual_seed(999)
+        v = torch.randn(2, 50, 200)
+        m = torch.ones(2, 50, 200)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_very_long_sequences(self):
+        """Very long sequences (t_x=100, t_y=500)."""
+        torch.manual_seed(1234)
+        v = torch.randn(1, 100, 500)
+        m = torch.ones(1, 100, 500)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_mask_effective_length_one(self):
+        """Mask reduces effective lengths to 1x1 within a larger tensor."""
+        torch.manual_seed(10)
+        v = torch.randn(2, 5, 10)
+        m = torch.ones(2, 5, 10)
+        m[0, 1:, :] = 0
+        m[0, :, 1:] = 0
+        # Sample 0: effectively 1x1, Sample 1: full 5x10
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_mask_minimal_path(self):
+        """Mask where t_x_eff = t_y_eff (forces diagonal path)."""
+        torch.manual_seed(20)
+        v = torch.randn(3, 6, 12)
+        m = torch.ones(3, 6, 12)
+        # Force sample 1 to t_x=3, t_y=3 (diagonal)
+        m[1, 3:, :] = 0
+        m[1, :, 3:] = 0
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_all_negative_values(self):
+        """All input values are negative."""
+        torch.manual_seed(33)
+        v = -torch.abs(torch.randn(2, 4, 8))
+        m = torch.ones(2, 4, 8)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_all_zero_values(self):
+        """All input values are zero (path still valid and monotonic)."""
+        v = torch.zeros(2, 3, 6)
+        m = torch.ones(2, 3, 6)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_large_positive_values(self):
+        """Large values to check for overflow issues in float32 DP."""
+        torch.manual_seed(44)
+        v = torch.randn(2, 5, 15) * 100.0
+        m = torch.ones(2, 5, 15)
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))
+
+    def test_mixed_lengths_in_batch(self):
+        """Each sample in a batch has different effective lengths."""
+        torch.manual_seed(500)
+        v = torch.randn(4, 10, 30)
+        m = torch.ones(4, 10, 30)
+        # Sample 0: 3x8, Sample 1: 5x15, Sample 2: 10x30 (full), Sample 3: 1x1
+        m[0, 3:, :] = 0
+        m[0, :, 8:] = 0
+        m[1, 5:, :] = 0
+        m[1, :, 15:] = 0
+        m[3, 1:, :] = 0
+        m[3, :, 1:] = 0
+        assert torch.equal(_run_cython(v, m), _run_pytorch(v, m))

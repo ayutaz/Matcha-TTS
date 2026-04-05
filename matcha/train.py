@@ -75,8 +75,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     if cfg.get("compile_model", False):
         compile_mode = cfg.get("compile_mode", "default")
-        log.info("Compiling encoder and decoder with torch.compile (mode=%s)...", compile_mode)
-        model.encoder = torch.compile(model.encoder, mode=compile_mode)
+        # Only compile the decoder estimator. The encoder contains einops.rearrange
+        # (in text_encoder.py) which causes torch.compile graph breaks.
+        # The decoder estimator is free of such ops and compiles cleanly.
+        log.info("Compiling decoder.estimator with torch.compile (mode=%s)...", compile_mode)
         model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
 
     if cfg.get("gradient_checkpointing", False):

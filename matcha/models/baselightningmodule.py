@@ -17,6 +17,44 @@ from matcha.utils.utils import plot_tensor
 log = utils.get_pylogger(__name__)
 
 
+def build_warmup_cosine_scheduler(optimizer, scheduler_cfg):
+    """Build a SequentialLR with linear warmup followed by cosine decay.
+
+    Args:
+        optimizer: The optimizer instance.
+        scheduler_cfg: A dict-like config with keys:
+            warmup_steps (int): Number of warmup steps (default 500).
+            start_factor (float): Initial lr multiplier (default 0.1).
+            T_max (int): Total cosine annealing steps (default 20000).
+            eta_min (float): Minimum lr for cosine decay (default 5e-5).
+
+    Returns:
+        A SequentialLR scheduler and the step interval string.
+    """
+    warmup_steps = int(getattr(scheduler_cfg, "warmup_steps", 500))
+    start_factor = float(getattr(scheduler_cfg, "start_factor", 0.1))
+    T_max = int(getattr(scheduler_cfg, "T_max", 20000))
+    eta_min = float(getattr(scheduler_cfg, "eta_min", 5e-5))
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=start_factor,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=T_max,
+        eta_min=eta_min,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_steps],
+    )
+    return scheduler
+
+
 class BaseLightningClass(LightningModule, ABC):
     def update_data_statistics(self, data_statistics):
         if data_statistics is None:
@@ -31,14 +69,31 @@ class BaseLightningClass(LightningModule, ABC):
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
         if getattr(self.hparams, "scheduler", None) is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch",
-                },
-            }
+            scheduler_cfg = self.hparams.scheduler
+            # Check if this is a warmup_cosine_safe config (dict-based, no _target_)
+            scheduler_type = getattr(scheduler_cfg, "type", None) if not callable(scheduler_cfg) else None
+            if scheduler_type is None and isinstance(scheduler_cfg, dict):
+                scheduler_type = scheduler_cfg.get("type", None)
+
+            if scheduler_type == "warmup_cosine_safe":
+                scheduler = build_warmup_cosine_scheduler(optimizer, scheduler_cfg)
+                return {
+                    "optimizer": optimizer,
+                    "lr_scheduler": {
+                        "scheduler": scheduler,
+                        "interval": "step",
+                    },
+                }
+            else:
+                # Original Hydra _partial_ path
+                scheduler = scheduler_cfg(optimizer=optimizer)
+                return {
+                    "optimizer": optimizer,
+                    "lr_scheduler": {
+                        "scheduler": scheduler,
+                        "interval": "epoch",
+                    },
+                }
 
         return {"optimizer": optimizer}
 

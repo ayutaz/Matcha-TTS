@@ -15,10 +15,17 @@ run_name: jvs_fast
 
 model:
   n_vocab: 55
+  scheduler:
+    type: warmup_cosine_safe
+    warmup_steps: 500
+    start_factor: 0.1
+    T_max: 20000
+    eta_min: 5e-5
 
 compile_model: true
 compile_mode: "default"
-gradient_checkpointing: true
+# Disabled: メモリに余裕があるため再計算オーバーヘッドを除去
+gradient_checkpointing: false
 
 callbacks:
   early_stopping:
@@ -37,3 +44,5 @@ callbacks:
 
 trainer:
   max_epochs: 500
+  # DDP待機時間を削減（早期段階のバリデーション頻度を下げる）
+  check_val_every_n_epoch: 50

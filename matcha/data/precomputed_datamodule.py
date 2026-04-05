@@ -25,7 +25,7 @@ class BucketBatchSampler(Sampler):
     """
 
     def __init__(
-        self, file_sizes: list[int], batch_size: int, num_buckets: int = 10, drop_last: bool = False, seed: int = 0
+        self, file_sizes: list[int], batch_size: int, num_buckets: int = 20, drop_last: bool = False, seed: int = 0
     ):
         self.batch_size = batch_size
         self.drop_last = drop_last
@@ -87,7 +87,7 @@ class DistributedBucketBatchSampler(Sampler):
         batch_size: int,
         num_replicas: int,
         rank: int,
-        num_buckets: int = 10,
+        num_buckets: int = 20,
         drop_last: bool = False,
         seed: int = 0,
     ):
@@ -241,6 +241,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
         data_statistics=None,
         load_durations=False,
         preload_to_memory=False,
+        num_buckets=20,
         **kwargs,
     ):
         super().__init__()
@@ -278,6 +279,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
                 batch_size=self.hparams.batch_size,
                 num_replicas=num_replicas,
                 rank=rank,
+                num_buckets=self.hparams.num_buckets,
                 drop_last=True,
                 seed=seed,
             )
@@ -285,6 +287,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
             bucket_sampler = BucketBatchSampler(
                 file_sizes=file_sizes,
                 batch_size=self.hparams.batch_size,
+                num_buckets=self.hparams.num_buckets,
                 drop_last=True,
                 seed=seed,
             )
