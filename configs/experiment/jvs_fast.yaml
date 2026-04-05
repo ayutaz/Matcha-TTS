@@ -15,14 +15,6 @@ run_name: jvs_fast
 
 model:
   n_vocab: 55
-  optimizer:
-    lr: 5e-4
-    weight_decay: 0.01
-  scheduler:
-    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-    _partial_: true
-    T_max: 100
-    eta_min: 1e-5
 
 compile_model: true
 compile_mode: "default"
@@ -32,7 +24,7 @@ callbacks:
   early_stopping:
     _target_: lightning.pytorch.callbacks.EarlyStopping
     monitor: "loss/val"
-    patience: 5
+    patience: 10
     min_delta: 0.001
     mode: "min"
     check_finite: true
@@ -41,7 +33,7 @@ callbacks:
     _target_: lightning.pytorch.callbacks.EMAWeightAveraging
     decay: 0.9995
     update_every_n_steps: 1
-    update_starting_at_epoch: 5
+    update_starting_at_epoch: 10
 
 trainer:
-  max_epochs: 100
+  max_epochs: 500

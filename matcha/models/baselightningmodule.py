@@ -67,7 +67,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        total_loss = loss_dict["dur_loss"] + 0.5 * loss_dict["prior_loss"] + loss_dict["diff_loss"]
+        total_loss = sum(loss_dict.values())
 
         self.log_dict(
             {
@@ -87,7 +87,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        total_loss = loss_dict["dur_loss"] + 0.5 * loss_dict["prior_loss"] + loss_dict["diff_loss"]
+        total_loss = sum(loss_dict.values())
 
         self.log_dict(
             {

@@ -315,7 +315,8 @@ def cli():
         with torch.inference_mode():
             dummy_x = torch.zeros(1, 10, dtype=torch.long, device=device)
             dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=device)
-            model.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2)
+            dummy_spks = torch.zeros(1, dtype=torch.long, device=device) if model.n_spks > 1 else None
+            model.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2, spks=dummy_spks)
         print("[+] Warmup complete.")
 
     # Auto-detect language from model if not explicitly set

@@ -16,6 +16,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import soundfile as sf
 import torch
 import torchaudio as ta
 from tqdm import tqdm
@@ -57,8 +58,9 @@ def process_sample(
     out_path = output_dir / f"{spk_name}_{wav_p.stem}.pt"
 
     # -- mel spectrogram --
-    audio, sr = ta.load(wav_path)
+    data, sr = sf.read(wav_path, dtype="float32")
     assert sr == SAMPLE_RATE, f"Expected {SAMPLE_RATE} Hz, got {sr} Hz for {wav_path}"
+    audio = torch.from_numpy(data).unsqueeze(0)  # (1, samples)
     mel = mel_spectrogram(
         audio,
         N_FFT,

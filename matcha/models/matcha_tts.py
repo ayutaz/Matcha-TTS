@@ -121,6 +121,12 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         mu_x, logw, x_mask = self.encoder(x, x_lengths, spks)
 
         w = torch.exp(logw) * x_mask
+        # Clamp boundary blank durations (positions 0 and -1 in interspersed sequence)
+        # to prevent duration predictor instability on edge tokens
+        for b in range(w.shape[0]):
+            seq_len = x_lengths[b].item()
+            w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)           # first blank
+            w[b, 0, seq_len - 1] = w[b, 0, seq_len - 1].clamp(max=3.0)  # last blank
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_max_length = y_lengths.max()
@@ -211,8 +217,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             out_offset = torch.randint(
                 0, 2**63 - 1, (max_offset.shape[0],), dtype=torch.long, device=max_offset.device
             ) % max_offset.clamp(min=1)
-            attn_cut = torch.empty(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
-            y_cut = torch.empty(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
+            attn_cut = torch.zeros(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
+            y_cut = torch.zeros(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
 
             batch_size = attn.shape[0]
             y_cut_lengths = torch.empty(batch_size, dtype=torch.long, device=y_lengths.device)
@@ -237,7 +243,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
 
         if self.prior_loss:
             masked_n = torch.sum(y_mask) * self.n_feats
-            prior_loss = 0.5 * F.mse_loss(y * y_mask, mu_y * y_mask, reduction="sum") / masked_n
+            prior_loss = 0.5 * (F.mse_loss(y * y_mask, mu_y * y_mask, reduction="sum") / masked_n + LOG_2PI)
         else:
             prior_loss = 0
 

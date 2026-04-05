@@ -6,8 +6,9 @@ Usage:
 Steps:
     1. Collect parallel100 + nonpara30 subsets from all speakers
     2. Resample audio from 24 kHz to 22050 Hz
-    3. Generate multi-speaker file lists (audio_path|speaker_id|text)
-    4. Split into train/val sets (95/5)
+    3. Trim leading/trailing silence (JVS has ~500ms silence per utterance)
+    4. Generate multi-speaker file lists (audio_path|speaker_id|text)
+    5. Split into train/val sets (95/5)
 """
 
 import argparse
@@ -15,26 +16,85 @@ import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import soundfile as sf
+import torch
 import torchaudio
 from tqdm import tqdm
 
 
-def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050):
-    """Resample a single audio file."""
-    waveform, sr = torchaudio.load(input_path)
+def trim_silence(waveform, sample_rate, top_db=30, margin_ms=50):
+    """Trim leading and trailing silence from waveform.
+
+    Uses energy-based detection with a safety margin to avoid clipping consonant onsets.
+
+    Args:
+        waveform: (channels, samples) tensor
+        sample_rate: sample rate in Hz
+        top_db: silence threshold in dB below peak amplitude
+        margin_ms: safety margin in milliseconds to preserve around speech
+    Returns:
+        Trimmed waveform tensor
+    """
+    audio = waveform.squeeze(0)  # (samples,)
+    if audio.numel() == 0:
+        return waveform
+
+    # Compute frame-level RMS energy (10ms frames)
+    frame_length = int(sample_rate * 0.01)  # 10ms
+    hop = frame_length
+    n_frames = audio.numel() // hop
+
+    if n_frames == 0:
+        return waveform
+
+    frames = audio[: n_frames * hop].reshape(n_frames, hop)
+    rms = (frames**2).mean(dim=1).sqrt()
+
+    # Threshold: top_db below peak RMS
+    peak_rms = rms.max()
+    if peak_rms <= 0:
+        return waveform
+    threshold = peak_rms * (10 ** (-top_db / 20))
+
+    # Find first and last frame above threshold
+    above = (rms > threshold).nonzero(as_tuple=True)[0]
+    if len(above) == 0:
+        return waveform
+
+    start_frame = above[0].item()
+    end_frame = above[-1].item()
+
+    # Convert to samples with margin
+    margin_samples = int(sample_rate * margin_ms / 1000)
+    start_sample = max(0, start_frame * hop - margin_samples)
+    end_sample = min(audio.numel(), (end_frame + 1) * hop + margin_samples)
+
+    return waveform[:, start_sample:end_sample]
+
+
+def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050, do_trim=True):
+    """Resample and optionally trim silence from a single audio file."""
+    data, sr = sf.read(input_path, dtype="float32")
+    if data.ndim == 1:
+        data = data[None, :]  # (1, samples)
+    else:
+        data = data.T  # (channels, samples)
+    waveform = torch.from_numpy(data)
     if sr != orig_sr:
         orig_sr = sr
     if orig_sr != target_sr:
         resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
         waveform = resampler(waveform)
-    torchaudio.save(str(output_path), waveform, target_sr)
+    if do_trim:
+        waveform = trim_silence(waveform, target_sr)
+    sf.write(str(output_path), waveform.squeeze(0).numpy(), target_sr)
 
 
 def _resample_worker(args_tuple):
     """Worker function for parallel resampling. Accepts a tuple for pickling compatibility."""
-    src_wav, dst_wav, target_sr = args_tuple
+    src_wav, dst_wav, target_sr, do_trim = args_tuple
     try:
-        resample_audio(src_wav, dst_wav, target_sr=target_sr)
+        resample_audio(src_wav, dst_wav, target_sr=target_sr, do_trim=do_trim)
         return str(src_wav), None
     except Exception as e:
         return str(src_wav), str(e)
@@ -71,6 +131,11 @@ def main():
         nargs="+",
         default=["parallel100", "nonpara30"],
         help="Subsets to include (default: parallel100 nonpara30)",
+    )
+    parser.add_argument(
+        "--no-trim-silence",
+        action="store_true",
+        help="Disable silence trimming (default: trim enabled)",
     )
     args = parser.parse_args()
 
@@ -121,7 +186,7 @@ def main():
 
                 dst_wav = spk_wav_dir / f"{utt_id}.wav"
                 if not dst_wav.exists():
-                    resample_tasks.append((str(src_wav), str(dst_wav), args.target_sr))
+                    resample_tasks.append((str(src_wav), str(dst_wav), args.target_sr, not args.no_trim_silence))
 
                 filelist.append(f"{dst_wav.resolve()}|{spk_id}|{text}")
 

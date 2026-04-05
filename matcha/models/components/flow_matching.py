@@ -134,17 +134,16 @@ class BASECFM(torch.nn.Module, ABC):
         """
         b, _, t_len = mu.shape
 
-        # random timestep (logit-normal distribution: concentrates sampling
-        # around t≈0.5 where the flow is hardest to learn)
-        u = torch.randn([b, 1, 1], device=mu.device, dtype=mu.dtype)
-        t = torch.sigmoid(u)
+        # random timestep — uniform over [0, 1] as in the original CFM formulation
+        t = torch.rand([b, 1, 1], device=mu.device, dtype=mu.dtype)
         # sample noise p(x_0) — ensure dtype matches mu
         z = torch.randn_like(x1, dtype=mu.dtype)
 
         y = (1 - self.one_minus_sigma_min * t) * z + t * x1
         u = x1 - self.one_minus_sigma_min * z
 
-        loss = F.mse_loss(self.estimator(y, mask, mu, t.squeeze(), spks), u, reduction="sum") / (
+        estimator_out = self.estimator(y, mask, mu, t.squeeze(), spks)
+        loss = F.mse_loss(estimator_out.float(), u.float(), reduction="sum") / (
             torch.sum(mask) * u.shape[1]
         )
         return loss, y

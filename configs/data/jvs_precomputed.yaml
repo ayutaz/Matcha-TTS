@@ -8,7 +8,7 @@ pin_memory: True
 n_spks: 100
 n_feats: 80
 data_statistics:
-  mel_mean: -6.963938
-  mel_std: 2.478805
+  mel_mean: -6.550095
+  mel_std: 2.383771
 seed: ${seed}
 load_durations: false

@@ -7,8 +7,8 @@ max_epochs: -1
 accelerator: gpu
 devices: [0]
 
-# FP16 mixed precision: T4 achieves 65 TFLOPS (8x FP32), auto loss scaling via PyTorch Lightning
-precision: 16-mixed
+# FP32 precision: FP16 causes training instability on T4/V100 GPUs
+precision: 32-true
 
 # perform a validation loop every N training epochs
 check_val_every_n_epoch: 5
