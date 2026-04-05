@@ -74,12 +74,23 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     if cfg.get("compile_model", False):
-        compile_mode = cfg.get("compile_mode", "default")
-        # Only compile the decoder estimator. The encoder contains einops.rearrange
-        # (in text_encoder.py) which causes torch.compile graph breaks.
-        # The decoder estimator is free of such ops and compiles cleanly.
-        log.info("Compiling decoder.estimator with torch.compile (mode=%s)...", compile_mode)
-        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+        # DDP + torch.compile causes NCCL watchdog hangs during initial compilation
+        # (GIL contention in CUDA APIs across ranks). Only compile for single-GPU training.
+        num_devices = cfg.trainer.get("devices", 1)
+        strategy = cfg.trainer.get("strategy", "auto")
+        is_multi_gpu = (isinstance(num_devices, (list, tuple)) and len(num_devices) > 1) or (
+            isinstance(num_devices, int) and num_devices > 1
+        )
+        is_ddp_strategy = hasattr(strategy, "_target_") and "DDP" in str(strategy._target_)
+        is_ddp = is_multi_gpu or is_ddp_strategy or (isinstance(strategy, str) and "ddp" in strategy)
+        if is_ddp:
+            log.warning("compile_model=true is incompatible with DDP (NCCL hang). Skipping compilation.")
+        else:
+            compile_mode = cfg.get("compile_mode", "default")
+            # Only compile the decoder estimator. The encoder contains einops.rearrange
+            # (in text_encoder.py) which causes torch.compile graph breaks.
+            log.info("Compiling decoder.estimator with torch.compile (mode=%s)...", compile_mode)
+            model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
 
     if cfg.get("gradient_checkpointing", False):
         if hasattr(model, "enable_gradient_checkpointing"):
