@@ -41,21 +41,21 @@ class TestJvsFastConfig:
         """check_val_every_n_epoch should be 10 for effective early stopping."""
         assert jvs_fast_config["trainer"]["check_val_every_n_epoch"] == 10
 
-    def test_precision_16_mixed(self, jvs_fast_config):
-        """precision should be 16-mixed for FP16 mixed precision training."""
-        assert jvs_fast_config["trainer"]["precision"] == "16-mixed"
+    def test_precision_fp32(self, jvs_fast_config):
+        """precision should be 32-true (FP16 degrades Duration Predictor quality)."""
+        assert jvs_fast_config["trainer"]["precision"] == "32-true"
 
-    def test_scheduler_t_max(self, jvs_fast_config):
-        """T_max should match actual total steps (~48000)."""
-        assert jvs_fast_config["model"]["scheduler"]["T_max"] == 48000
+    def test_no_scheduler(self, jvs_fast_config):
+        """No LR scheduler should be configured (paper-faithful: constant lr=1e-4)."""
+        assert "scheduler" not in jvs_fast_config.get("model", {})
 
     def test_early_stopping_patience(self, jvs_fast_config):
         """patience should be 15 (effective 150 epochs with check_every=10)."""
         assert jvs_fast_config["callbacks"]["early_stopping"]["patience"] == 15
 
-    def test_ema_early_start(self, jvs_fast_config):
-        """EMA should start at epoch 3 (after warmup)."""
-        assert jvs_fast_config["callbacks"]["ema"]["update_starting_at_epoch"] == 3
+    def test_ema_start_epoch_10(self, jvs_fast_config):
+        """EMA should start at epoch 10 (paper-faithful)."""
+        assert jvs_fast_config["callbacks"]["ema"]["update_starting_at_epoch"] == 10
 
 
 class TestDdpOptimizedConfig:

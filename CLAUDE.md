@@ -148,7 +148,8 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 - **EMA**: `decay=0.9995`、`update_starting_at_epoch=10`
 
 ### 過去に失敗した最適化（適用しないこと）
-- **FP16 Mixed Precision**: MSE lossのreduction="sum"でFP16 overflow → NaN発散
+- **FP16 Mixed Precision**: Loss計算にFP32キャスト追加してもDuration Predictor品質が劣化（音素あたり2.4フレーム vs 正解7.2フレーム）。encoder/decoder内部表現のFP16精度不足が原因。NaN防止だけでは不十分（2026-04-06検証済み）
+- **LRスケジューラ（warmup + cosine decay）**: 原論文はlr=1e-4固定。cosine decayはDuration Predictorの収束を妨げる可能性
 - **Logit-Normal timestep sampling**: t≈0,1の学習不足 → decoder出力に正バイアス
 - **out_size=172**: Duration Predictorが内部音素に1-1.5フレームしか割り当てず発音不明瞭
 - **prior_loss重み0.5**: encoder mu_y品質低下 → decoder条件付け劣化の連鎖
