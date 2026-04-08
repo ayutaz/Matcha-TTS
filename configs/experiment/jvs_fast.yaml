@@ -26,7 +26,7 @@ callbacks:
   early_stopping:
     _target_: lightning.pytorch.callbacks.EarlyStopping
     monitor: "loss/val"
-    patience: 15  # 15 × 10 epochs = 150 epochs of no improvement triggers stop
+    patience: 30  # 30 × 10 epochs = 300 epochs of no improvement triggers stop
     min_delta: 0.001
     mode: "min"
     check_finite: true
@@ -38,7 +38,7 @@ callbacks:
     update_starting_at_epoch: 10  # 原論文準拠
 
 trainer:
-  max_epochs: 500
+  max_epochs: 2500  # 原論文500Kステップに匹敵する~240Kステップ（100話者で十分な学習量）
   # バリデーション頻度: early stoppingを有効に機能させる
   check_val_every_n_epoch: 10
   # FP32精度: FP16はDuration Predictor品質劣化を招く（2026-04-06検証済み）
