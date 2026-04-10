@@ -16,6 +16,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 import torch
 import torchaudio as ta
@@ -43,6 +44,22 @@ def parse_filelist(filelist_path: str):
     return filepaths_and_text
 
 
+def load_duration(durations_dir: Path, spk_name: str, stem: str, expected_text_len: int):
+    """Load a .npy duration file and validate length against text sequence."""
+    npy_name = f"{spk_name}_{stem}.npy"
+    npy_path = durations_dir / npy_name
+    if not npy_path.exists():
+        return None
+    dur = np.load(str(npy_path))
+    dur_tensor = torch.from_numpy(dur).int()
+    if len(dur_tensor) != expected_text_len:
+        raise ValueError(
+            f"Duration length mismatch for {npy_name}: "
+            f"duration={len(dur_tensor)}, text={expected_text_len}"
+        )
+    return dur_tensor
+
+
 def process_sample(
     wav_path: str,
     spk: int,
@@ -50,8 +67,13 @@ def process_sample(
     output_dir: Path,
     mel_mean: float,
     mel_std: float,
+    durations_dir=None,  # Path | None
 ):
-    """Compute mel + text sequence for a single sample and save as .pt."""
+    """Compute mel + text + optional duration for a single sample and save as .pt.
+
+    Returns:
+        tuple: (out_path, skipped) where skipped=True if duration was required but missing.
+    """
     # Include speaker dir name to avoid collisions (e.g., jvs001/VOICEACTRESS100_001)
     wav_p = Path(wav_path)
     spk_name = wav_p.parent.name  # e.g. "jvs001"
@@ -79,17 +101,24 @@ def process_sample(
     text_norm = intersperse(text_norm, 0)  # add_blank=True
     text_norm = torch.IntTensor(text_norm)
 
+    # -- duration (optional) --
+    duration = None
+    if durations_dir is not None:
+        duration = load_duration(Path(durations_dir), spk_name, wav_p.stem, len(text_norm))
+        if duration is None:
+            return out_path, True  # skipped
+
     # -- save --
-    torch.save(
-        {
-            "mel": mel,
-            "text": text_norm,
-            "spk": spk,
-            "cleaned_text": cleaned_text,
-        },
-        out_path,
-    )
-    return out_path
+    save_dict = {
+        "mel": mel,
+        "text": text_norm,
+        "spk": spk,
+        "cleaned_text": cleaned_text,
+    }
+    if duration is not None:
+        save_dict["durations"] = duration
+    torch.save(save_dict, out_path)
+    return out_path, False
 
 
 def process_sample_text_only(text: str):
@@ -139,6 +168,13 @@ def main():
         action="store_true",
         help="Use GPU for mel spectrogram computation (runs mel on main thread, text in parallel)",
     )
+    parser.add_argument(
+        "--durations-dir",
+        type=str,
+        default=None,
+        help="Directory containing .npy duration files from Julius forced alignment. "
+             "Naming: {spk_name}_{utterance_id}.npy",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -157,6 +193,7 @@ def main():
         print("GPU mel computation: enabled (mel on main thread, text processing in parallel)")
 
     errors = []
+    skipped_count = 0
     start_time = time.time()
 
     if use_gpu:
@@ -212,15 +249,19 @@ def main():
                 mel = mel.cpu()
                 mel = normalize(mel, args.mel_mean, args.mel_std)
 
-                torch.save(
-                    {
-                        "mel": mel,
-                        "text": text_norm,
-                        "spk": spk,
-                        "cleaned_text": cleaned_text,
-                    },
-                    out_path,
-                )
+                duration = None
+                if args.durations_dir:
+                    dur_dir = Path(args.durations_dir)
+                    duration = load_duration(dur_dir, spk_name, wav_p.stem, len(text_norm))
+                    if duration is None:
+                        skipped_count += 1
+                        tqdm.write(f"SKIP: Duration not found for {wav_path}")
+                        continue
+
+                save_dict = {"mel": mel, "text": text_norm, "spk": spk, "cleaned_text": cleaned_text}
+                if duration is not None:
+                    save_dict["durations"] = duration
+                torch.save(save_dict, out_path)
             except Exception as e:
                 errors.append((wav_path, str(e)))
                 tqdm.write(f"ERROR [mel] [{wav_path}]: {e}")
@@ -239,6 +280,7 @@ def main():
                     output_dir,
                     args.mel_mean,
                     args.mel_std,
+                    Path(args.durations_dir) if args.durations_dir else None,
                 )
                 futures[future] = wav_path
 
@@ -250,7 +292,12 @@ def main():
             ):
                 wav_path = futures[future]
                 try:
-                    future.result()
+                    result = future.result()
+                    if isinstance(result, tuple):
+                        out_path, skipped = result
+                        if skipped:
+                            skipped_count += 1
+                            tqdm.write(f"SKIP: Duration not found for {wav_path}")
                 except Exception as e:
                     errors.append((wav_path, str(e)))
                     tqdm.write(f"ERROR [{wav_path}]: {e}")
@@ -266,6 +313,9 @@ def main():
     else:
         print(f"\nDone. Saved {len(entries)} .pt files to {output_dir}")
     print(f"Processing speed: {speed:.1f} samples/sec ({elapsed:.1f}s total)")
+    if args.durations_dir:
+        dur_count = total_processed - skipped_count
+        print(f"Durations: {dur_count} embedded, {skipped_count} skipped (no .npy found)")
 
 
 if __name__ == "__main__":
