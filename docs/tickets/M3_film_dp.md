@@ -219,6 +219,27 @@ class DurationPredictor(nn.Module):
 - `n_spks=1`のとき`spks=None`が渡され、DP内部で条件分岐によりFiLMはスキップされる
 - `n_spks > 1`のとき`spks`は`(B, 64)`のembeddingテンソル（`MatchaTTS.forward`のL184で`self.spk_emb(spks)`済み）
 
+#### 2.5 チェックポイント互換性対応
+
+既存チェックポイント（FiLM layer未定義）からのロード時に`film_1`, `film_2`キーが欠損する。
+以下の2つの対応方針を実装する:
+
+**方針A: 新規学習（推奨）**
+- 外部アライナーdurationを使用する新しい学習は一から開始するため、チェックポイント互換性は不要
+- jvs_aligned.yamlでは`ckpt_path`を指定しない
+
+**方針B: 既存チェックポイントからのfine-tune（将来対応）**
+- DurationPredictorに`load_state_dict`オーバーライドを追加:
+```python
+def load_state_dict(self, state_dict, strict=True):
+    # FiLM keys missing from old checkpoints → use identity init
+    if self.n_spks > 1:
+        for key in ['film_1.weight', 'film_1.bias', 'film_2.weight', 'film_2.bias']:
+            if key not in state_dict:
+                state_dict[key] = getattr(self, key.rsplit('.', 1)[0]).state_dict()[key.rsplit('.', 1)[1]]
+    super().load_state_dict(state_dict, strict=strict)
+```
+
 ### 3. エージェントチームの役割と人数
 
 | 役割 | 人数 | 担当内容 |
@@ -251,6 +272,8 @@ class DurationPredictor(nn.Module):
 | `test_dp_film_different_speakers_different_output` | 学習後（ランダム重み）に異なる`spks`で異なる`logw`を生成 |
 | `test_dp_film_parameter_count` | FiLM追加後のパラメータ数が`filter_channels=256, spk_emb_dim=64`で+66,560 |
 | `test_dp_forward_without_spks_multispeaker` | `n_spks=2`のDPに`spks=None`を渡してもエラーにならない（FiLMスキップ） |
+| `test_dp_load_old_checkpoint_without_film` | FiLM keyなしのstate_dictをロードしてもエラーにならないことを検証（`load_state_dict`オーバーライドにより欠損キーが自動補完される） |
+| `test_dp_load_old_checkpoint_preserves_identity` | 欠損FiLM keyがidentity init値で補完されることを検証（補完後の`film_1`出力が`gamma=1, beta=0`） |
 
 **テストクラス: `TestTextEncoderFiLMIntegration`**
 
@@ -268,7 +291,7 @@ class DurationPredictor(nn.Module):
 
 | 懸念事項 | 対策 | レビュー時の確認 |
 |---------|------|----------------|
-| **既存チェックポイントとの互換性** | FiLM重みは`n_spks > 1`時のみ生成。`n_spks=1`の英語モデル（LJSpeech）は完全互換。多話者の既存JVSチェックポイントはFiLM重みが欠損するため`strict=False`でのロードまたは再学習が必要 | `strict=False`ロード時にFiLM重みがidentity initされることを確認 |
+| **既存チェックポイントとの互換性** | FiLM重みは`n_spks > 1`時のみ生成。`n_spks=1`の英語モデル（LJSpeech）は完全互換。多話者の既存JVSチェックポイントはFiLM重みが欠損するため、方針A（新規学習、`ckpt_path`指定なし）または方針B（`load_state_dict`オーバーライドによるidentity init自動補完）で対応する（詳細は2.5節を参照） | 方針Aの場合: 新規学習で`ckpt_path`が未指定であることを確認。方針Bの場合: `load_state_dict`オーバーライドによりFiLM重みがidentity initされることをテストで確認 |
 | **FP32精度** | FiLMの`gamma * x + beta`演算はFP32では問題なし。FP16ではgammaが大きくなるとoverflow可能性あり | JVS学習設定が`precision="32-true"`であることを確認 |
 | **勾配フロー** | `x_dp = torch.detach(x)`によりencoderへの勾配は遮断済み。FiLMの勾配は`spks`を経由して`spk_emb`に流れるため、話者embeddingがDP損失からも学習される | `spk_emb`の勾配が`dur_loss`と`diff_loss`の両方から供給されることを確認 |
 | **FiLM適用位置** | norm後（gamma/betaがLayerNormのgamma/betaと機能的に重複する可能性）。ただしLayerNormのgamma/betaはチャネル共通、FiLMのgamma/betaは話者条件付きなので役割は異なる | 適用位置がnorm後、drop前であることをコードレビューで確認 |
@@ -284,7 +307,7 @@ class DurationPredictor(nn.Module):
 ### 7. 後続タスクへの連絡事項
 
 - **M4（学習実行）**: FiLMのidentity initにより、学習初期は条件付けなしと同等の挙動。FiLM重みの学習はoptimizer設定を変更する必要はない（同一のlr=1e-4、AdamWで学習可能）
-- **M4（チェックポイント）**: 既存のJVSチェックポイントからの再開時は`strict=False`でロードし、FiLM重みはidentity initで初期化される。これは意図された動作
+- **M4（チェックポイント）**: 新規学習の場合は`ckpt_path`指定不要（方針A）。既存チェックポイントからfine-tuneする場合は`load_state_dict`オーバーライドによりFiLM重みがidentity initで自動補完される（方針B）。詳細は2.5節を参照
 - **M5（評価）**: 評価時にはDP出力の話者依存性を検証する。同一テキストで異なる話者を指定した際にduration分布が異なることを確認する
 - **T-M3-02**: Blank zero-initはembedding初期化のみでFiLMとは完全に独立。並行実施可能
 
