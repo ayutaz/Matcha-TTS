@@ -123,6 +123,13 @@ Text → cleaners (english_cleaners2 / japanese_cleaners) → 音素列 → ブ�
 - **`matcha/hifigan/`** — HiFi-GANボコーダ（事前学習済み）。推論時はweight_norm除去済み。
 - **`matcha/utils/monotonic_align/`** — MAS。CUDA入力時はPyTorch GPU実装（torch.jit.script）、CPU時はCythonフォールバック。
 
+### Duration Predictor
+- **アーキテクチャ**: 2層Conv1d（256ch, k=3）+ Linear projection。~395Kパラメータ
+- **受容野**: 5トークンのみ（2層×k=3、dilation無し）。日本語のプロソディ文脈には狭い
+- **話者条件付け**: 間接的のみ（encoderのdetach出力経由）。DP内に直接のFiLM/話者projection無し
+- **勾配**: `x_dp = torch.detach(x)` — encoder→DP方向の勾配なし（Glow-TTS/Grad-TTS準拠）
+- **損失**: log-domain MSE、blank含む全トークンで均等重み。blankが~50%を占め短duration側にバイアス
+
 ### 学習損失
 
 3つの損失の合計: **継続時間損失**（予測された継続時間に対するMSE）、**事前分布損失**（KLダイバージェンス + LOG_2PI）、**フローマッチング損失**（メルに対するデノイジング目的関数）。全て重み1.0で均等加算（原論文準拠）。
@@ -146,6 +153,16 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 - **原論文準拠のLR**: `lr=1e-4`、scheduler=なし、`weight_decay=0.0`。高LRは不安定
 - **一様分布timestep sampling**: logit-normalはTTSでは検証不足で品質劣化の原因
 - **EMA**: `decay=0.9995`、`update_starting_at_epoch=10`
+- **max_epochs=2500**: 原論文500Kステップに匹敵する~240Kステップ。500epでは不十分（ただしMAS退化問題は学習量では解決しない）
+
+### 学習ステップ数の比較（原論文 vs JVS）
+| 指標 | 原論文（LJSpeech） | JVS 500ep | JVS 2500ep |
+|------|-------------------|-----------|------------|
+| 総ステップ | 500,000 | 48,000 | 240,000 |
+| 有効バッチサイズ | 64 | 128 | 128 |
+| サンプル露出量 | 32M | 6.1M | 30.7M |
+| 話者数 | 1 | 100 | 100 |
+| 話者あたり露出 | 32M | 61K | 307K |
 
 ### 過去に失敗した最適化（適用しないこと）
 - **FP16 Mixed Precision**: Loss計算にFP32キャスト追加してもDuration Predictor品質が劣化（音素あたり2.4フレーム vs 正解7.2フレーム）。encoder/decoder内部表現のFP16精度不足が原因。NaN防止だけでは不十分（2026-04-06検証済み）
@@ -156,10 +173,54 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 - **torch.empty（out_size切り出し）**: 未初期化メモリでNaN混入 → torch.zeros必須
 - **LR 5e-4 + weight_decay=0.01**: 原論文より攻撃的すぎて不安定
 
+### MASアライメント退化問題（未解決、2026-04-10確認）
+
+100話者JVS学習において、MAS（Monotonic Alignment Search）が構造的に退化アライメントを生成する問題が確認された。**学習量を増やしても改善しない**（500ep→2500epで悪化: 39.2%→43.0%）。
+
+#### 症状
+- 学習サンプルの**39-43%でMASアライメントが退化**（phonemeの80%以上が1フレーム）
+- blank[0]にフレームが集中（退化時: 平均101フレーム、正常時: 平均4フレーム）
+- 全phonemeの62.9%が≤1フレーム、73.8%が≤2フレーム
+- Duration Predictorは退化したMASターゲットを忠実に学習 → 推論時に各phoneme ~2フレーム
+
+#### 原因チェーン
+```
+Encoderのmu_xがblankとphonemeで類似（std差 <0.05）
+  → MASのlog_prior計算でblank位置がphonemeと同等のスコアを得る
+    → MASの貪欲DPがblankにフレームを大量割当（monotonicity制約下で合理的）
+      → Duration Predictorが退化ターゲットを学習（detachにより encoder→DP勾配なし）
+```
+
+#### 検証済みの数値
+| 指標 | 退化サンプル(43%) | 正常サンプル(57%) |
+|------|-----------------|-----------------|
+| phoneme median duration | 1.0フレーム | 2.0フレーム |
+| blank[0] duration | mean=101 | mean=4 |
+| メル中のblank占有率 | 63% | 49% |
+| encoder mu_x norm (phoneme) | 2.06-2.26 | 6.14-7.81 |
+
+#### 学習量は原因ではない
+- 原論文: 500Kステップ（LJSpeech、単一話者）
+- JVS 500ep: 48Kステップ（原論文の9.6%）→ MAS退化率39.2%
+- JVS 2500ep: 240Kステップ（原論文の48%）→ MAS退化率**43.0%（悪化）**
+- 5倍の学習でも改善なし → アルゴリズムレベルの問題
+
+#### 既知の関連情報（文献調査）
+- MAS + 決定論的Duration Predictorの組合せは**平均回帰バイアス**が既知（Lajszczak et al., 2024）
+- Alphacephei分析: 「MASは大規模単一話者DBでは機能するが、多様なデータでは失敗が予想される」
+- VITS式確率的Duration Predictorが有効な代替案（GitHub issue #125）
+- F5-TTSはDuration Predictorを完全に廃止（DiTによる暗黙的アライメント）
+
+#### 候補対策（未実装）
+1. **MASにblankペナルティ追加**: log_priorのblank位置にバイアス項を追加し、phonemeへのフレーム割当を促進。最もシンプルで低リスク
+2. **外部アライナーによる事前計算duration**: Montreal Forced Aligner等で正確なdurationを計算し`use_precomputed_durations=true`で使用。MASをバイパス
+3. **確率的Duration Predictor（VITS式）**: normalizing flowsでduration分布をモデル化。アーキテクチャ変更が必要だが根本的解決
+4. **Duration Predictorの直接話者条件付け**: FiLMレイヤーまたは話者projectionをDP内に追加（現在はdetachされたencoder出力経由のみ）
+
 ### JVSデータの注意点
 - **無音トリミング必須**: JVSコーパスは各発話の先頭/末尾に~500msの無音を含む。`prepare_jvs.py`で自動トリミング（`top_db=30`、50msマージン）
 - **mel統計量**: トリミング後のデータで再計算が必要（`mel_mean: -6.550095`, `mel_std: 2.383771`）
-- **blank[0] Duration爆発**: Duration Predictorが先頭blankトークンに異常に大きなdurationを予測する場合がある。推論時のclampで対症的に対応可能だが、根本的にはデータのトリミングと十分な学習が必要
+- **blank[0] Duration爆発**: MASが先頭blankに大量フレームを割り当て、Duration Predictorがこれを学習する。推論時のclamp（max=3.0）で対症対応済みだが、根本原因はMASアライメント退化問題（上記参照）
 - **torchaudio非互換**: PyTorch 2.10+ではtorchcodec依存でtorchaudio.loadが失敗する場合あり。`soundfile`をフォールバックとして使用
 
 ## パフォーマンス最適化
