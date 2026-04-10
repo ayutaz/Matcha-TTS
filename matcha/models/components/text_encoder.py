@@ -83,11 +83,12 @@ class ConvReluNorm(nn.Module):
 
 
 class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout):
+    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout, n_spks=1, spk_emb_dim=64):
         super().__init__()
         self.in_channels = in_channels
         self.filter_channels = filter_channels
         self.p_dropout = p_dropout
+        self.n_spks = n_spks
 
         self.drop = torch.nn.Dropout(p_dropout)
         self.conv_1 = torch.nn.Conv1d(in_channels, filter_channels, kernel_size, padding=kernel_size // 2)
@@ -96,14 +97,34 @@ class DurationPredictor(nn.Module):
         self.norm_2 = LayerNorm(filter_channels)
         self.proj = torch.nn.Conv1d(filter_channels, 1, 1)
 
-    def forward(self, x, x_mask):
+        if n_spks > 1:
+            # FiLM: speaker-conditioned affine transform after each LayerNorm
+            self.film_1 = nn.Linear(spk_emb_dim, filter_channels * 2)
+            self.film_2 = nn.Linear(spk_emb_dim, filter_channels * 2)
+            self._init_film_identity(self.film_1, filter_channels)
+            self._init_film_identity(self.film_2, filter_channels)
+
+    @staticmethod
+    def _init_film_identity(film_layer, filter_channels):
+        """Initialize FiLM layer to identity transform (gamma=1, beta=0)."""
+        nn.init.zeros_(film_layer.weight)
+        nn.init.zeros_(film_layer.bias)
+        film_layer.bias.data[:filter_channels] = 1.0
+
+    def forward(self, x, x_mask, spks=None):
         x = self.conv_1(x * x_mask)
         x = torch.relu(x)
         x = self.norm_1(x)
+        if self.n_spks > 1 and spks is not None:
+            gamma_1, beta_1 = self.film_1(spks).chunk(2, dim=-1)
+            x = gamma_1.unsqueeze(-1) * x + beta_1.unsqueeze(-1)
         x = self.drop(x)
         x = self.conv_2(x * x_mask)
         x = torch.relu(x)
         x = self.norm_2(x)
+        if self.n_spks > 1 and spks is not None:
+            gamma_2, beta_2 = self.film_2(spks).chunk(2, dim=-1)
+            x = gamma_2.unsqueeze(-1) * x + beta_2.unsqueeze(-1)
         x = self.drop(x)
         x = self.proj(x * x_mask)
         return x * x_mask
@@ -371,6 +392,9 @@ class TextEncoder(nn.Module):
 
         self.emb = torch.nn.Embedding(n_vocab, self.n_channels)
         torch.nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
+        # Zero-init blank embedding (index 0) to promote blank/phoneme separation
+        # in encoder mu_x output. Blank remains trainable (no padding_idx).
+        self.emb.weight.data[0].zero_()
 
         if encoder_params.prenet:
             self.prenet = ConvReluNorm(
@@ -399,6 +423,8 @@ class TextEncoder(nn.Module):
             duration_predictor_params.filter_channels_dp,
             duration_predictor_params.kernel_size,
             duration_predictor_params.p_dropout,
+            n_spks=n_spks,
+            spk_emb_dim=spk_emb_dim,
         )
 
     def forward(self, x, x_lengths, spks=None):
@@ -431,6 +457,6 @@ class TextEncoder(nn.Module):
         mu = self.proj_m(x) * x_mask
 
         x_dp = torch.detach(x)
-        logw = self.proj_w(x_dp, x_mask)
+        logw = self.proj_w(x_dp, x_mask, spks=spks)
 
         return mu, logw, x_mask
