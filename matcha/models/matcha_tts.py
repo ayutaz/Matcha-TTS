@@ -178,6 +178,10 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 Should be divisible by 2^{num of UNet downsamplings}. Needed to increase batch size.
             spks (torch.Tensor, optional): speaker ids.
                 shape: (batch_size,)
+            durations (torch.Tensor, optional): precomputed phoneme durations from external aligner
+                (e.g. Julius forced alignment via convert_julius_to_durations.py).
+                May be int64 or float32; converted to float internally for generate_path().
+                shape: (batch_size, 1, max_text_length) or (batch_size, max_text_length)
         """
         if self.n_spks > 1:
             # Get speaker embedding
@@ -191,7 +195,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
 
         if self.use_precomputed_durations:
-            attn = generate_path(durations.squeeze(1), attn_mask.squeeze(1))
+            # M1出力のdurationはint64の可能性があるため、float変換して
+            # generate_path内のcumsum/sequence_maskとの型整合性を保証
+            attn = generate_path(durations.float().squeeze(1), attn_mask.squeeze(1))
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
             # Disable autocast: MAS requires FP32 for numerical stability of log-prior matmul
