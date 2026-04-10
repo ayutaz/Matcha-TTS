@@ -17,10 +17,10 @@ run_name: jvs_aligned
 data:
   load_durations: true
 
-# Model: MASバイパス + precomputed durations使用
+# Model: n_vocab=55 (日本語音素)
+# use_precomputed_durationsはmatcha.yamlで${data.load_durations}から自動解決
 model:
   n_vocab: 55
-  use_precomputed_durations: true
 
 compile_model: true
 compile_mode: "default"

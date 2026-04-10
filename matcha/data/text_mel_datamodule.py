@@ -280,7 +280,7 @@ class TextMelBatchCollate:
             filepaths.append(item["filepath"])
             x_texts.append(item["x_text"])
             if item["durations"] is not None:
-                durations[i, : item["durations"].shape[-1]] = item["durations"]
+                durations[i, : item["durations"].shape[-1]] = item["durations"].long()
 
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)

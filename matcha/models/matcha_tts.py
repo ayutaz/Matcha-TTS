@@ -197,7 +197,13 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         if self.use_precomputed_durations:
             # M1出力のdurationはint64の可能性があるため、float変換して
             # generate_path内のcumsum/sequence_maskとの型整合性を保証
-            attn = generate_path(durations.float().squeeze(1), attn_mask.squeeze(1))
+            durations_f = durations.float()
+            if durations_f.dim() == 3:
+                durations_f = durations_f.squeeze(1)
+            assert durations_f.dim() == 2, (
+                f"Expected 2D durations (B, T_text), got shape {durations_f.shape}"
+            )
+            attn = generate_path(durations_f, attn_mask.squeeze(1))
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
             # Disable autocast: MAS requires FP32 for numerical stability of log-prior matmul
