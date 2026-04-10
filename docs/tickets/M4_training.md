@@ -103,7 +103,7 @@ run_name: jvs_aligned
 model:
   n_vocab: 55
 
-compile_model: true
+compile_model: false
 compile_mode: "default"
 gradient_checkpointing: false
 
@@ -132,6 +132,8 @@ trainer:
 - `defaults`で`jvs_precomputed_aligned.yaml`を参照（`load_durations: true`を含む）
 - `run_name: jvs_aligned`（ログ出力ディレクトリの分離）
 - `tags`に`"aligned"`, `"julius"`を追加（実験管理用）
+- `compile_model: false`をYAML内に直接記載（実行コマンドでの上書きに頼らない。`torch.compile`はDDP + dynamic shapesで不安定なため）
+- `gradient_checkpointing: false`の場合は`static_graph: true`（ddp_optimized.yaml）が使用可能。CLAUDE.mdの`static_graph=false`制約は`gradient_checkpointing: true`の場合に限定される
 - その他パラメータ（lr, EMA, max_epochs, precision）はMASベースラインと同一に保つ
 
 #### 2. 新規データ設定ファイル `configs/data/jvs_precomputed_aligned.yaml` の作成
@@ -192,7 +194,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
 ```
 
 コマンドライン上書きパラメータの理由:
-- `compile_model=false`: DDP + gradient checkpointingとの非互換（ddp_optimized.yamlの`static_graph: true`と衝突するため）
+- `compile_model=false`: `torch.compile`はDDP + dynamic shapesで不安定なため（jvs_aligned.yamlに直接記載済みだが、安全のため明示的に指定）
 - `data.batch_size=32`: 4x T4 (16GB) でout_size=null時の安定上限
 - `data.num_workers=0`: `preload_to_memory=true`使用時はI/Oワーカー不要
 - `+data.preload_to_memory=true`: 全.ptファイルをメモリにプリロード（NFS I/O排除）
@@ -261,9 +263,12 @@ MASに関連するパラメータ（monotonic_align等）はモデルパラメ�
    duration配列は`int64`で音素数分（平均~50要素 = 400バイト）であり、メル（80x数百フレーム = 数十KB）に比べて
    無視できるサイズのため問題にならない見込みだが、全サンプルプリロード後のメモリ使用量を確認すること。
 
-2. **`static_graph: true`とuse_precomputed_durationsの組み合わせ**: DDPのstatic_graphはforward時の計算グラフが
+2. **`static_graph: true`と`compile_model`/`gradient_checkpointing`の関係**: DDPのstatic_graphはforward時の計算グラフが
    毎回同一であることを前提とする。`use_precomputed_durations=true`ではMASブロックが常にスキップされるため
-   グラフは安定するが、`compile_model=false`を指定している場合は`static_graph`の恩恵は限定的。
+   グラフは安定する。`gradient_checkpointing: false`（jvs_aligned.yamlのデフォルト）では`static_graph: true`が
+   使用可能であり、DDP通信の最適化（バケットの事前割り当て等）の恩恵を受けられる。
+   CLAUDE.mdの「`static_graph=false`が必要」という制約は`gradient_checkpointing: true`の場合に限定される。
+   `compile_model: false`はYAMLに直接記載済みであり、`static_graph: true`との衝突は発生しない。
    問題が発生した場合は`static_graph: false`に変更する。
 
 3. **EMAのupdate_starting_at_epoch=10**: M3でDurationPredictor構造が変更されているため、
@@ -478,6 +483,7 @@ WandBの利点:
 | dur_loss収束開始 | `sub_loss/train_dur_loss`の推移 | 単調減少傾向 |
 | EMA開始 | ログメッセージ確認 | `EMAWeightAveraging`が有効化 |
 | GPU使用率 | `nvidia-smi` | 4GPU全てが80%以上 |
+| GPU間loss/val乖離 | 各GPUのval_lossをTensorBoardで比較 | GPU間の差が平均値の10%以内 |
 
 **MASベースラインとの比較**:
 - MASベースライン（FP32 500ep）のEpoch 10時点のdur_lossと比較
@@ -498,6 +504,7 @@ uv run python scripts/evaluate_durations.py \
 | Duration予測精度 | 予測duration vs 正解durationのMAE | MAE < 2.0フレーム |
 | FiLM条件付けの効果 | 話者別のduration精度分散 | 話者間の精度分散が小さいこと |
 | Blank duration | blank[0]の予測duration | 平均 < 5フレーム（MASベースライン: 退化時101フレーム） |
+| GPU間loss/val乖離 | Epoch 50時点で全GPUのval_lossを比較 | GPU間の差が平均値の10%以内（sync_dist=Falseの影響確認） |
 
 注意: `scripts/evaluate_durations.py`はこの時点では存在しない可能性がある。
 必要に応じてT-M4-02の一部として簡易評価スクリプトを作成する（M5の本格評価とは別）。
@@ -678,6 +685,13 @@ uv run tensorboard --logdir_spec \
    学習中にデータが変更される心配はない。ただし、学習中にM2のデータを再生成してしまうと、
    メモリ上の古いデータと/dev/shm上の新しいデータが不整合を起こす。
    - 対策: 学習中は`/dev/shm/jvs_precomputed_aligned/`を変更しないこと。
+
+6. **`validation_step`の`sync_dist=False`によるEarly Stopping精度**: `baselightningmodule.py`の`validation_step`で
+   `sync_dist=False`が設定されているため、Early Stoppingのmonitor値（`loss/val`）はGPU 0のローカル値のみを使用する。
+   4GPU DDP環境では各GPUのvalidation batchが異なるため、ローカル値は全体平均と乖離する可能性がある。
+   - 対策案1: `sync_dist=True`に変更（正確だが通信オーバーヘッド増加）
+   - 対策案2: 現状維持（patience=30で十分なバッファがあり、ローカル値の変動は吸収される）
+   - 推奨: 対策案2を採用。patience=30 x check_every=10 = 300 epoch相当の猶予があり、sync_distのDDPオーバーヘッド削減の方がメリットが大きい。ただし、学習中にGPU 0のloss/valが他GPUと大きく乖離していないかをTensorBoardで定期的に確認する
 
 #### レビュー項目
 

@@ -349,8 +349,8 @@ MASをバイパスし、外部forced alignerで正確なphoneme durationを事�
 - `torch.cat`によるテンソル結合（einops pack除去）
 
 ### 4GPU DDP学習の注意事項
-- `compile_model=false`が必要（gradient checkpointingとの非互換）
-- `static_graph=false`が必要（同上）
+- `compile_model=false`が必要（`torch.compile`はDDP + dynamic shapesで不安定）
+- `static_graph=false`が必要 — **`gradient_checkpointing: true`の場合のみ**。`gradient_checkpointing: false`（jvs_fast/jvs_aligned）では`static_graph: true`が使用可能で、DDP通信最適化の恩恵を受けられる
 - `out_size=null`の場合 `data.batch_size=32`が安定上限
 - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`推奨
 - NCCLタイムアウトは7200秒に設定済み（NFS I/O遅延対策）
