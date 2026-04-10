@@ -420,7 +420,7 @@ def setup(self, stage: str | None = None):
     )
 ```
 
-#### 4. collate関数の確認（変更不要）
+#### 4. collate関数の修正（`load_durations`フラグベースの判定に変更）
 
 **ファイル**: `matcha/data/text_mel_datamodule.py` L247-297
 
@@ -430,7 +430,27 @@ def setup(self, stage: str | None = None):
 - L281-282: `if item["durations"] is not None: durations[i, : item["durations"].shape[-1]] = item["durations"]` でパディング
 - L296: `"durations": durations if not torch.eq(durations, 0).all() else None` で全ゼロならNoneに変換
 
-**注意点**: L296の `torch.eq(durations, 0).all()` チェックは、durationが全サンプルでNoneの場合（`load_durations=False`）にバッチのdurationをNoneにするための既存ロジック。`load_durations=True` 時はdurationが非ゼロ値を含むため、正しくテンソルとして返される。変更不要。
+**問題点**: L296の `torch.eq(durations, 0).all()` は全音素duration=0のedge caseでNoneを返す。`load_durations=True`時にこれが発生するとモデルがMASフォールバックし、precomputed durationsの意味がなくなる。通常のJuliusアライメントで全音素0フレームになることは考えにくいが、極端に短い発話や前処理エラーで発生し得る。判定基準をデータの内容（全ゼロかどうか）ではなく、設定フラグ（`load_durations`）に基づくべきである。
+
+**改善案**: `TextMelBatchCollate`に`load_durations`フラグを追加し、`load_durations=True`の場合は全ゼロ判定をスキップして常にduration tensorを返す。`load_durations=False`の場合は既存の全ゼロ→None変換を維持（後方互換性）。
+
+具体的なコード変更:
+
+```python
+# TextMelBatchCollate.__init__にload_durationsパラメータ追加
+def __init__(self, n_spks, load_durations=False):
+    self.n_spks = n_spks
+    self.load_durations = load_durations
+
+# __call__内の判定ロジック変更
+if self.load_durations:
+    # Always return durations tensor (never None)
+    pass  # durations tensor is already populated
+elif torch.eq(durations, 0).all():
+    durations = None
+```
+
+`PrecomputedTextMelDataModule.train_dataloader()`と`val_dataloader()`で`TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations)`を渡すように修正する。
 
 #### 5. データフローの確認（変更不要だが要確認）
 
@@ -508,6 +528,12 @@ T-M2-03で実データが揃った段階で `true` に変更する。T-M2-02の�
 # - duration=None の複数サンプル辞書をリスト化
 # - TextMelBatchCollate(n_spks=100) で collate
 # - 戻り値の "durations" が None であることを確認
+
+# test_collate_load_durations_true_never_returns_none
+# - duration=0（全音素0フレーム）のサンプル辞書をリスト化
+# - TextMelBatchCollate(n_spks=100, load_durations=True) で collate
+# - 戻り値の "durations" が None ではなく、torch.long テンソルであることを確認
+# - load_durations=True の場合、全ゼロ判定をスキップして常にduration tensorを返すことを検証
 ```
 
 #### 結合テスト
@@ -536,7 +562,7 @@ T-M2-03で実データが揃った段階で `true` に変更する。T-M2-02の�
 
 4. **後方互換性**: `load_durations=False`（デフォルト）のとき、既存の `"durations"` キーなし `.pt` ファイルで正常動作すること。`data.get("durations", None)` は `load_durations=True` 時のみ実行されるため、`False` 時は `"durations": None` がハードコードされ、既存動作と同一。
 
-5. **L296の全ゼロチェック**: `TextMelBatchCollate` L296 の `torch.eq(durations, 0).all()` は、理論上はdurationが全音素で0フレームのケースでNoneを返してしまう。実際にはJuliusアライメントで全音素が0フレームになることはあり得ないため問題ないが、edge caseとして認識しておく。
+5. **L296の全ゼロチェック**: `TextMelBatchCollate` L296 の `torch.eq(durations, 0).all()` は、理論上はdurationが全音素で0フレームのケースでNoneを返してしまう。上記セクション4の修正により、`load_durations=True`時は全ゼロ判定をスキップして常にduration tensorを返すため、このedge caseは解消される。`load_durations=False`時は既存の挙動を維持する。
 
 ### 一から作り直すとしたら
 
@@ -652,15 +678,15 @@ def validate(pt_dir: str, expect_durations: bool):
                 errors.append((pt_path.name,
                     f"Duration length ({len(dur)}) != text length ({len(text)})"))
 
-            # duration合計値とmel長の比較
+            # duration合計値とmel長の厳密一致チェック
+            # generate_path()はduration合計がmel長と一致することを暗黙に仮定する。
+            # 不一致があるとアライメント行列が不正になり、学習が破綻する。
             dur_sum = dur.sum().item()
             mel_len = mel.shape[-1]
             if dur_sum != mel_len:
                 stats["dur_sum_mismatch"] += 1
-                # 許容範囲: +/- 2フレーム (端数丸めの影響)
-                if abs(dur_sum - mel_len) > 2:
-                    errors.append((pt_path.name,
-                        f"Duration sum ({dur_sum}) far from mel length ({mel_len})"))
+                errors.append((pt_path.name,
+                    f"Duration sum ({dur_sum}) != mel length ({mel_len})"))
 
             # NaN/Inf チェック
             if torch.isnan(mel).any():
@@ -760,9 +786,11 @@ L14の `load_durations: false` を `true` に変更する。`configs/model/match
 # [3] duration長とtext長の一致
 # - 全サンプルで len(durations) == len(text)
 
-# [4] duration合計値とmel長の整合性
-# - dur.sum() と mel.shape[-1] の差が2フレーム以内
-# - 大幅な乖離がある場合はM1のアライメント品質を再確認
+# [4] duration合計値とmel長の厳密一致
+# - 全サンプルで dur.sum() == mel.shape[-1] であること（0フレーム差）
+# - generate_path()はduration合計がmel長と一致することを暗黙に仮定するため、不一致はエラーとして報告する
+# - M1側でduration配列生成時にmel長との厳密一致を保証する（最終セグメントのdurationを調整）
+# - M2側では検証のみ行い、不一致サンプルはエラーとして報告する
 
 # [5] durationの統計値が妥当
 # - 平均duration（blank除外）: 3-10フレーム程度
@@ -791,6 +819,16 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
 - `dur_loss`, `prior_loss`, `diff_loss` が全てfinite値であること
 - `dur_loss` がMAS使用時より小さいことが期待される（ターゲットが正確なため）
 
+#### ユニットテスト
+
+```python
+# test_duration_sum_equals_mel_length_strict
+# - duration付き .pt ファイルを複数作成（dur.sum() == mel.shape[-1] のものと不一致のもの）
+# - validate_precomputed_durations.py の validate() 関数を呼び出し、
+#   dur.sum() != mel.shape[-1] のサンプルがエラーとして報告されることを確認
+# - 全サンプルで duration合計 == mel長 であることを厳密に検証（許容誤差0フレーム）
+```
+
 ### 懸念事項とレビュー項目
 
 1. **M1出力の完全性**: M1がtrain/valの全サンプルに対してduration `.npy` を生成していることが前提。欠損があれば `precompute_dataset.py` がスキップし、`.pt` にdurationが含まれない。スキップ0件であることを確認すること。
@@ -802,6 +840,8 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
 4. **既存チェックポイントとの非互換性**: `load_durations: true` に切り替えた後、既存のMASベースチェックポイントから再開すると、モデル重みは互換だがDuration Predictorのターゲットが変わるため、`dur_loss` が一時的に急増する可能性がある。M4で段階的学習を計画しているため、この影響はM4で管理する。
 
 5. **/dev/shmの揮発性**: `/dev/shm` はRAMディスクであり再起動で消失する。`data/jvs_precomputed_v2/` にディスク上のコピーを維持し、再起動後に再コピーできるようにする。
+
+6. **M1のフレーム変換での丸め誤差**: M1のフレーム変換で丸め誤差が発生した場合、T-M2-03の厳密一致検証で検出される。M1側での絶対時刻ベース計算採用が前提であり、M1がduration合計をmel長に一致させる正規化処理を実装していることを確認すること。
 
 ### 一から作り直すとしたら
 
