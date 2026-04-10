@@ -169,9 +169,10 @@ class PrecomputedTextMelDataset(Dataset):
         - "cleaned_text": str
     """
 
-    def __init__(self, pt_dir, n_spks, seed=None, preload_to_memory=False):
+    def __init__(self, pt_dir, n_spks, seed=None, preload_to_memory=False, load_durations=False):
         self.pt_dir = Path(pt_dir)
         self.n_spks = n_spks
+        self.load_durations = load_durations
         self.pt_paths = sorted(
             os.path.join(str(self.pt_dir), entry.name)
             for entry in os.scandir(str(self.pt_dir))
@@ -202,13 +203,26 @@ class PrecomputedTextMelDataset(Dataset):
         spk = data["spk"] if self.n_spks > 1 else None
         cleaned_text = data["cleaned_text"]
 
+        durations = None
+        if self.load_durations:
+            durations = data.get("durations", None)
+            if durations is None:
+                raise KeyError(
+                    f"load_durations=True but 'durations' key not found in {pt_path}. "
+                    f"Re-run precompute_dataset.py with --durations-dir."
+                )
+            if len(durations) != len(text):
+                raise ValueError(
+                    f"Duration length ({len(durations)}) != text length ({len(text)}) in {pt_path}"
+                )
+
         return {
             "x": text,
             "y": mel,
             "spk": spk,
             "filepath": str(pt_path),
             "x_text": cleaned_text,
-            "durations": None,
+            "durations": durations,
         }
 
     def get_file_sizes(self) -> list[int]:
@@ -253,12 +267,14 @@ class PrecomputedTextMelDataModule(LightningDataModule):
             self.hparams.n_spks,
             self.hparams.seed,
             preload_to_memory=self.hparams.preload_to_memory,
+            load_durations=self.hparams.load_durations,
         )
         self.validset = PrecomputedTextMelDataset(  # pylint: disable=attribute-defined-outside-init
             self.hparams.val_pt_dir,
             self.hparams.n_spks,
             self.hparams.seed,
             preload_to_memory=self.hparams.preload_to_memory,
+            load_durations=self.hparams.load_durations,
         )
 
     def train_dataloader(self):
@@ -298,7 +314,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
             batch_sampler=bucket_sampler,
             num_workers=nw,
             pin_memory=self.hparams.pin_memory,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
             persistent_workers=nw > 0,
             prefetch_factor=8 if nw > 0 else None,
         )
@@ -311,7 +327,7 @@ class PrecomputedTextMelDataModule(LightningDataModule):
             num_workers=nw,
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
             persistent_workers=nw > 0,
             prefetch_factor=8 if nw > 0 else None,
         )

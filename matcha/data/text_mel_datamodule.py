@@ -245,8 +245,9 @@ class TextMelDataset(torch.utils.data.Dataset):
 
 
 class TextMelBatchCollate:
-    def __init__(self, n_spks):
+    def __init__(self, n_spks, load_durations=False):
         self.n_spks = n_spks
+        self.load_durations = load_durations
         self._len_compat_cache: Dict[int, int] = {}
 
     def _fix_len_compat(self, length):
@@ -293,5 +294,7 @@ class TextMelBatchCollate:
             "spks": spks,
             "filepaths": filepaths,
             "x_texts": x_texts,
-            "durations": durations if not torch.eq(durations, 0).all() else None,
+            # load_durations=True: always return duration tensor (skip all-zero check)
+            # load_durations=False: existing behaviour (all-zero -> None)
+            "durations": durations if self.load_durations or not torch.eq(durations, 0).all() else None,
         }
