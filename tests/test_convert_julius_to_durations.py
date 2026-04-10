@@ -51,6 +51,7 @@ sys.modules.setdefault("phonemizer.backend.espeak.espeak", _fake_espeak_espeak)
 from matcha.utils.utils import intersperse  # noqa: E402
 from scripts.convert_julius_to_durations import (  # noqa: E402
     HOP_LENGTH,
+    JULIUS_TIME_UNIT,
     SAMPLE_RATE,
     align_julius_with_pyopenjtalk,
     align_julius_with_pyopenjtalk_dtw,
@@ -112,6 +113,51 @@ class TestParseLabFile:
         )
         result = parse_lab_file(lab)
         assert len(result) == 2
+
+    def test_parse_lab_invalid_timestamp_skipped(self, tmp_path, caplog):
+        """Lines with non-numeric timestamps are skipped with a warning."""
+        lab = tmp_path / "invalid.lab"
+        lab.write_text(
+            "0 10000000 silB\n"
+            "abc def k\n"
+            "10000000 20000000 silE\n"
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_lab_file(lab)
+        # The invalid line is skipped; valid lines are kept
+        assert len(result) == 2
+        assert result[0][2] == "silB"
+        assert result[1][2] == "silE"
+        # Warning was logged
+        assert any("Skipping invalid line" in rec.message for rec in caplog.records)
+
+    def test_parse_lab_partial_corruption(self, tmp_path, caplog):
+        """File with mix of valid and corrupt lines returns only valid entries."""
+        lab = tmp_path / "partial.lab"
+        lab.write_text(
+            "0 5000000 silB\n"
+            "5000000 NOTANUMBER k\n"
+            "5000000 10000000 a\n"
+            "10000000 15000000 silE\n"
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_lab_file(lab)
+        assert len(result) == 3
+        assert result[0][2] == "silB"
+        assert result[1][2] == "a"
+        assert result[2][2] == "silE"
+        # Exactly one warning for the corrupt line
+        warnings = [r for r in caplog.records if "Skipping invalid line" in r.message]
+        assert len(warnings) == 1
+        assert "line 2" in warnings[0].message
+
+    def test_julius_time_unit_constant(self):
+        """JULIUS_TIME_UNIT matches the expected HTK 100ns unit."""
+        assert JULIUS_TIME_UNIT == 10_000_000
 
 
 # ===========================================================================
@@ -511,6 +557,145 @@ class TestBuildDurationArrayWithBlanks:
         """Edge case: total_mel_frames=0 produces all-zero array."""
         arr = build_duration_array_with_blanks([5, 10], 0)
         assert all(arr >= 0)
+
+    def test_large_adjustment_logs_warning(self, caplog):
+        """Large frame adjustment (|diff| >= 10) logs a warning."""
+        import logging
+
+        durations = [5, 10, 15]  # sum=30
+        total_mel = 50  # diff=+20 (>= 10)
+        with caplog.at_level(logging.WARNING):
+            arr = build_duration_array_with_blanks(durations, total_mel)
+        assert arr.sum() == total_mel
+        # Warning should mention "Large frame adjustment"
+        assert any("Large frame adjustment" in rec.message for rec in caplog.records)
+
+    def test_small_adjustment_no_warning(self, caplog):
+        """Small frame adjustment (|diff| < 10) does NOT log a warning."""
+        import logging
+
+        durations = [5, 10, 15]  # sum=30
+        total_mel = 35  # diff=+5 (< 10)
+        with caplog.at_level(logging.WARNING):
+            arr = build_duration_array_with_blanks(durations, total_mel)
+        assert arr.sum() == total_mel
+        assert not any("Large frame adjustment" in rec.message for rec in caplog.records)
+
+
+# ===========================================================================
+# TestAlignMode
+# ===========================================================================
+
+
+class TestAlignMode:
+    """Tests for the align_mode parameter (B2b)."""
+
+    def _simple_data(self):
+        """Helper returning a clean konnichiwa alignment test case."""
+        julius_ph = ["sil", "k", "o", "N", "n", "i", "ch", "i", "w", "a", "sil"]
+        julius_dur = [10, 5, 4, 3, 4, 3, 5, 3, 4, 5, 8]
+        pyopenjtalk_ph = ["^", "k", "o", "[", "N", "n", "i", "ch", "i", "w", "a", "$"]
+        return julius_ph, pyopenjtalk_ph, julius_dur
+
+    def test_sequential_mode(self):
+        """align_mode='sequential' uses sequential alignment."""
+        julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
+        )
+        assert len(result) == len(pyopenjtalk_ph)
+        assert result[0] == 10  # ^
+        assert result[3] == 0   # [
+
+    def test_dtw_mode(self):
+        """align_mode='dtw' uses DTW alignment."""
+        julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw"
+        )
+        assert len(result) == len(pyopenjtalk_ph)
+        assert result[0] == 10  # ^
+        assert result[3] == 0   # [
+
+    def test_auto_mode_short_uses_dtw(self):
+        """auto mode routes short utterances (< 30 real phonemes) to DTW."""
+        # 8 real phonemes (< 30) -> DTW
+        julius_ph = ["sil", "k", "o", "N", "n", "i", "ch", "i", "w", "a", "sil"]
+        julius_dur = [10, 5, 4, 3, 4, 3, 5, 3, 4, 5, 8]
+        pyopenjtalk_ph = ["^", "k", "o", "[", "N", "n", "i", "ch", "i", "w", "a", "$"]
+
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto"
+        )
+        # Should produce same result as explicit DTW
+        result_dtw = align_julius_with_pyopenjtalk_dtw(
+            julius_ph, pyopenjtalk_ph, julius_dur
+        )
+        assert result == result_dtw
+
+    def test_auto_mode_long_uses_sequential(self):
+        """auto mode uses sequential for long utterances (>= 30 real phonemes)."""
+        # Build a long utterance with >= 30 real phonemes
+        julius_ph = ["sil"] + ["a", "i"] * 20 + ["sil"]
+        julius_dur = [5] + [3, 3] * 20 + [5]
+        # pyopenjtalk: ^ + 40 phonemes + $ = 42 items, 40 real phonemes
+        pyopenjtalk_ph = ["^"] + ["a", "i"] * 20 + ["$"]
+
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto"
+        )
+        assert len(result) == len(pyopenjtalk_ph)
+        assert result[0] == 5  # ^
+        assert result[-1] == 5  # $
+
+    def test_dtw_and_sequential_agree_on_clean(self):
+        """DTW and sequential produce identical results on clean input."""
+        julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
+        result_seq = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
+        )
+        result_dtw = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw"
+        )
+        assert result_seq == result_dtw
+
+
+# ===========================================================================
+# TestLookAheadWindow
+# ===========================================================================
+
+
+class TestLookAheadWindow:
+    """Tests for the improved 5-position look-ahead window."""
+
+    def test_lookahead_finds_phoneme_at_offset_4(self):
+        """Sequential alignment finds a phoneme 4 positions ahead (was limit 3)."""
+        # Julius has 3 extra phonemes between k and o
+        julius_ph = ["sil", "k", "x1", "x2", "x3", "o", "sil"]
+        julius_dur = [5, 4, 1, 1, 1, 3, 5]
+
+        pyopenjtalk_ph = ["^", "k", "o", "$"]
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
+        )
+        assert result[0] == 5  # ^
+        assert result[1] == 4  # k matched directly
+        # o is 3 positions past k+1 (at index 5, j_idx would be 2, so offset 3)
+        # With window of 5, this should be found
+        assert result[2] == 3  # o found within window of 5
+
+    def test_devoiced_vowel_window_5(self):
+        """Devoiced vowel search uses the wider 5-position window."""
+        # Julius: sil, s, x1, x2, x3, u, sil
+        # pyopenjtalk: ^, s, U, $
+        julius_ph = ["sil", "s", "x1", "x2", "x3", "u", "sil"]
+        julius_dur = [5, 4, 1, 1, 1, 3, 5]
+
+        pyopenjtalk_ph = ["^", "s", "U", "$"]
+        result = align_julius_with_pyopenjtalk(
+            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
+        )
+        assert result[2] == 3  # U matched to Julius "u" within 5-window
 
 
 # ===========================================================================

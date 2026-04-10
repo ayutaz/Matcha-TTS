@@ -7,6 +7,15 @@ devoiced vowels), and writes per-utterance duration arrays as .npy files.
 The output arrays have length 2*N+1 (blank-interspersed) and dtype int64,
 suitable for use with ``model.use_precomputed_durations=True``.
 
+Output format:
+    .npy files with dtype=int64, shape=(2*N+1,) where N is the number of phonemes.
+
+    NOTE: When loading into PyTorch for training with use_precomputed_durations=True,
+    the int64 array must be converted to float32:
+        durations = torch.from_numpy(np.load(path)).float()
+
+    This conversion is handled in matcha_tts.py forward() via durations.float().
+
 Usage:
     uv run python scripts/convert_julius_to_durations.py \
         --lab-dir data/julius_alignment \
@@ -38,6 +47,9 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 22050
 HOP_LENGTH = 256
 
+# HTK time unit: 100 nanoseconds (1e-7 seconds)
+JULIUS_TIME_UNIT = 10_000_000
+
 # Devoiced vowels in pyopenjtalk map to their lowercase counterpart in Julius
 _DEVOICED_TO_VOICED = {"A": "a", "I": "i", "U": "u", "E": "e", "O": "o"}
 
@@ -53,6 +65,9 @@ def parse_lab_file(lab_path: str | Path) -> list[tuple[float, float, str]]:
     HTK format: ``start_100ns end_100ns phoneme``
     where times are in 100-nanosecond units (1e-7 seconds).
 
+    Lines with non-numeric timestamps or fewer than 3 fields are skipped
+    with a warning rather than raising an exception.
+
     Args:
         lab_path: Path to the .lab file.
 
@@ -61,18 +76,25 @@ def parse_lab_file(lab_path: str | Path) -> list[tuple[float, float, str]]:
     """
     result: list[tuple[float, float, str]] = []
     with open(lab_path, encoding="utf-8") as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             parts = line.split()
             if len(parts) < 3:
                 continue
-            start_100ns = int(parts[0])
-            end_100ns = int(parts[1])
+            try:
+                start_sec = int(parts[0]) / JULIUS_TIME_UNIT
+                end_sec = int(parts[1]) / JULIUS_TIME_UNIT
+            except ValueError:
+                logger.warning(
+                    "Skipping invalid line %d in %s: %s",
+                    line_num,
+                    lab_path,
+                    line,
+                )
+                continue
             phoneme = parts[2]
-            start_sec = start_100ns / 10_000_000
-            end_sec = end_100ns / 10_000_000
             result.append((start_sec, end_sec, phoneme))
     return result
 
@@ -132,6 +154,7 @@ def align_julius_with_pyopenjtalk(
     julius_phonemes: list[str],
     pyopenjtalk_phonemes: list[str],
     julius_durations: list[int],
+    align_mode: str = "auto",
 ) -> list[int]:
     """Align Julius phonemes with pyopenjtalk phonemes and assign durations.
 
@@ -145,7 +168,8 @@ def align_julius_with_pyopenjtalk(
       5. Devoiced vowels (A,I,U,E,O) are matched against Julius lowercase
          vowels (a,i,u,e,o). If no matching Julius phoneme remains at the
          current position, duration=0 is assigned.
-      6. Regular phonemes are matched sequentially.
+      6. Regular phonemes are matched sequentially with a look-ahead window
+         of up to 5 positions.
 
     If the mismatch rate exceeds 5%, falls back to DTW alignment.
 
@@ -155,6 +179,10 @@ def align_julius_with_pyopenjtalk(
         pyopenjtalk_phonemes: Phoneme list from ``japanese_cleaners`` output
                               (split on spaces).
         julius_durations:  Frame durations for each Julius phoneme segment.
+        align_mode:        Alignment strategy: ``sequential`` (sequential only),
+                           ``dtw`` (always use DTW), or ``auto`` (default;
+                           short utterances < 30 real phonemes use DTW,
+                           longer ones use sequential with 5% DTW fallback).
 
     Returns:
         List of integer durations, one per pyopenjtalk phoneme.
@@ -164,6 +192,29 @@ def align_julius_with_pyopenjtalk(
     """
     if not pyopenjtalk_phonemes:
         return []
+
+    # Count real (non-prosody) phonemes for mode selection
+    n_real_phonemes = sum(
+        1
+        for ph in pyopenjtalk_phonemes
+        if ph not in PROSODY_SYMBOLS and ph not in {"^", "$"}
+    )
+
+    # DTW mode: always use DTW
+    if align_mode == "dtw":
+        return align_julius_with_pyopenjtalk_dtw(
+            julius_phonemes, pyopenjtalk_phonemes, julius_durations
+        )
+
+    # Auto mode: short utterances (< 30 real phonemes) use DTW directly
+    if align_mode == "auto" and n_real_phonemes < 30:
+        return align_julius_with_pyopenjtalk_dtw(
+            julius_phonemes, pyopenjtalk_phonemes, julius_durations
+        )
+
+    # --- Pre-process: separate prosody symbols from real phonemes ---
+    # Build indices for prosody-only positions vs real phoneme positions
+    _PROSODY_ONLY = {"#", "[", "]", "?"}
 
     n_julius = len(julius_phonemes)
     n_pyopenjtalk = len(pyopenjtalk_phonemes)
@@ -205,7 +256,7 @@ def align_julius_with_pyopenjtalk(
             continue
 
         # Rule 4: prosody-only markers
-        if ph in {"#", "[", "]", "?"}:
+        if ph in _PROSODY_ONLY:
             result[p_idx] = 0
             continue
 
@@ -216,52 +267,46 @@ def align_julius_with_pyopenjtalk(
             result[p_idx] = 0
             continue
 
-        # Map devoiced vowel targets through the Julius mapping
-        # pyopenjtalk "A" -> julius_target "a" -> julius may have "a"
-        # pyopenjtalk "sil" -> julius may have "sil"
-        # We need to find julius_target in the mapped julius sequence
-
-        matched = False
+        # Try direct match at current position first
         if j_idx < n_julius and julius_phonemes[j_idx] == julius_target:
-            # Direct match at current position
             result[p_idx] = julius_durations[j_idx]
             j_idx += 1
-            matched = True
         elif ph in _DEVOICED_TO_VOICED:
             # Devoiced vowel: Julius may have dropped it entirely
-            # Search a small window ahead in case of minor misalignment
+            # Search a window ahead (up to 5) in case of minor misalignment
             found = False
-            for k in range(j_idx, min(j_idx + 3, n_julius)):
+            for k in range(j_idx, min(j_idx + 5, n_julius)):
                 if julius_phonemes[k] == julius_target:
                     result[p_idx] = julius_durations[k]
                     j_idx = k + 1
                     found = True
-                    matched = True
                     break
+            if not found:
+                # Also check if the voiced variant matches (consistent matching)
+                voiced = _DEVOICED_TO_VOICED[ph]
+                for k in range(j_idx, min(j_idx + 5, n_julius)):
+                    if julius_phonemes[k] == voiced:
+                        result[p_idx] = julius_durations[k]
+                        j_idx = k + 1
+                        found = True
+                        break
             if not found:
                 # Devoiced vowel missing in Julius -> duration=0
                 result[p_idx] = 0
-                matched = True
         else:
-            # Look ahead a small window for the expected phoneme
+            # Look ahead a window (up to 5) for the expected phoneme
             found = False
-            for k in range(j_idx, min(j_idx + 3, n_julius)):
+            for k in range(j_idx, min(j_idx + 5, n_julius)):
                 if julius_phonemes[k] == julius_target:
                     result[p_idx] = julius_durations[k]
                     j_idx = k + 1
                     found = True
-                    matched = True
                     break
             if not found:
                 mismatches += 1
                 result[p_idx] = 0
-                matched = True
 
-    # Check mismatch rate and fall back to DTW if needed
-    # Count only non-prosody phonemes for mismatch rate
-    n_real_phonemes = sum(
-        1 for ph in pyopenjtalk_phonemes if ph not in PROSODY_SYMBOLS and ph not in {"^", "$"}
-    )
+    # Check mismatch rate and fall back to DTW if needed (sequential and auto modes)
     if n_real_phonemes > 0 and mismatches / n_real_phonemes > 0.05:
         logger.warning(
             "High mismatch rate (%.1f%%), falling back to DTW alignment",
@@ -412,6 +457,13 @@ def build_duration_array_with_blanks(
     # Adjust to match total_mel_frames
     current_sum = int(arr.sum())
     diff = total_mel_frames - current_sum
+    if abs(diff) >= 10:
+        logger.warning(
+            "Large frame adjustment: diff=%d (total_mel=%d, duration_sum=%d)",
+            diff,
+            total_mel_frames,
+            current_sum,
+        )
     if diff != 0:
         # Find the last non-zero entry (phoneme position) for adjustment
         last_nonzero = -1
@@ -440,6 +492,7 @@ def process_single_utterance(
     text: str,
     total_mel_frames: int,
     output_path: str | Path,
+    align_mode: str = "auto",
 ) -> tuple[bool, str]:
     """Process one utterance: .lab file -> .npy duration array.
 
@@ -448,6 +501,8 @@ def process_single_utterance(
         text:              Original Japanese text for this utterance.
         total_mel_frames:  Number of mel frames for this utterance.
         output_path:       Path to write the output .npy file.
+        align_mode:        Alignment strategy: ``sequential``, ``dtw``, or
+                           ``auto`` (default).
 
     Returns:
         (success, message) tuple.
@@ -478,7 +533,8 @@ def process_single_utterance(
 
         # 4. Align Julius with pyopenjtalk
         aligned_durations = align_julius_with_pyopenjtalk(
-            julius_mapped, pyopenjtalk_phonemes, julius_frame_durations
+            julius_mapped, pyopenjtalk_phonemes, julius_frame_durations,
+            align_mode=align_mode,
         )
 
         # 5. Build blank-interspersed duration array
@@ -535,8 +591,10 @@ def make_output_name(wav_path: str) -> str:
 
 def _worker(args_tuple):
     """Worker function for parallel processing."""
-    lab_path, text, total_mel_frames, output_path = args_tuple
-    return process_single_utterance(lab_path, text, total_mel_frames, output_path)
+    lab_path, text, total_mel_frames, output_path, align_mode = args_tuple
+    return process_single_utterance(
+        lab_path, text, total_mel_frames, output_path, align_mode=align_mode
+    )
 
 
 def main():
@@ -573,6 +631,23 @@ def main():
         default=8,
         help="Number of parallel workers (default: 8)",
     )
+    parser.add_argument(
+        "--align-mode",
+        type=str,
+        default="auto",
+        choices=["sequential", "dtw", "auto"],
+        help=(
+            "Alignment strategy: 'sequential' (sequential only), "
+            "'dtw' (always use DTW), 'auto' (default; short utterances "
+            "< 30 phonemes use DTW, longer ones use sequential with "
+            "5%% DTW fallback)"
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip utterances whose .npy output already exists",
+    )
     args = parser.parse_args()
 
     import torch
@@ -589,6 +664,7 @@ def main():
     tasks = []
     skipped_no_lab = 0
     skipped_no_mel = 0
+    skipped_resume = 0
 
     for wav_path, spk_id, text in entries:
         name = make_output_name(wav_path)
@@ -602,18 +678,23 @@ def main():
         if not mel_path.exists():
             skipped_no_mel += 1
             continue
+        if args.resume and out_path.exists():
+            skipped_resume += 1
+            continue
 
         # Load mel frame count from .pt file
         data = torch.load(str(mel_path), map_location="cpu", weights_only=True)
         total_mel_frames = data["mel"].shape[-1]
 
-        tasks.append((str(lab_path), text, total_mel_frames, str(out_path)))
+        tasks.append((str(lab_path), text, total_mel_frames, str(out_path), args.align_mode))
 
     print(f"Tasks: {len(tasks)}")
     if skipped_no_lab:
         print(f"Skipped (no .lab): {skipped_no_lab}")
     if skipped_no_mel:
         print(f"Skipped (no .pt):  {skipped_no_mel}")
+    if skipped_resume:
+        print(f"Skipped (resume):  {skipped_resume}")
 
     # Process
     errors = []
@@ -644,6 +725,8 @@ def main():
     print("\nResults:")
     print(f"  Success: {success_count}")
     print(f"  Errors:  {len(errors)}")
+    if skipped_resume:
+        print(f"  Skipped (resume): {skipped_resume}")
     print(f"  Speed:   {speed:.1f} files/sec ({elapsed:.1f}s total)")
 
     if errors:

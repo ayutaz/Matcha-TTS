@@ -8,6 +8,7 @@ import pytest
 
 from matcha.utils.alignment_metrics import (
     compute_corpus_stats,
+    compute_corpus_stats_streaming,
     compute_duration_stats,
     compute_phoneme_class_stats,
     is_degenerate,
@@ -225,6 +226,89 @@ class TestComputeCorpusStats:
         assert stats["degenerate_count"] == 0
         ph = stats["phoneme_duration_stats"]
         assert ph["mean"] == pytest.approx(np.mean([7, 3, 12]))
+
+
+# ===========================================================================
+# TestComputeCorpusStatsStreaming
+# ===========================================================================
+
+
+class TestComputeCorpusStatsStreaming:
+    def test_matches_batch_on_basic_input(self, tmp_path):
+        """Streaming stats match batch stats for mean, std, pct_le1, pct_le2."""
+        dur1 = np.array([0, 5, 0, 10, 0], dtype=np.int64)
+        dur2 = np.array([0, 8, 0, 12, 0, 6, 0], dtype=np.int64)
+
+        p1 = tmp_path / "d1.npy"
+        p2 = tmp_path / "d2.npy"
+        np.save(str(p1), dur1)
+        np.save(str(p2), dur2)
+
+        batch = compute_corpus_stats([dur1, dur2])
+        streaming = compute_corpus_stats_streaming([p1, p2])
+
+        assert streaming["total_samples"] == batch["total_samples"]
+        assert streaming["degenerate_count"] == batch["degenerate_count"]
+        assert streaming["degenerate_rate"] == pytest.approx(batch["degenerate_rate"])
+
+        # Phoneme stats: mean and std should match (Welford vs batch numpy)
+        b_ph = batch["phoneme_duration_stats"]
+        s_ph = streaming["phoneme_duration_stats"]
+        assert s_ph["mean"] == pytest.approx(b_ph["mean"], abs=1e-6)
+        assert s_ph["std"] == pytest.approx(b_ph["std"], abs=1e-6)
+        assert s_ph["pct_le1"] == pytest.approx(b_ph["pct_le1"])
+        assert s_ph["pct_le2"] == pytest.approx(b_ph["pct_le2"])
+
+        # Blank stats
+        assert streaming["blank_stats"]["mean_blank0"] == pytest.approx(
+            batch["blank_stats"]["mean_blank0"]
+        )
+        assert streaming["blank_stats"]["all_zero_rate"] == pytest.approx(
+            batch["blank_stats"]["all_zero_rate"]
+        )
+
+    def test_degenerate_detection(self, tmp_path):
+        """Streaming correctly identifies degenerate utterances."""
+        healthy = np.array([0, 10, 0, 8, 0], dtype=np.int64)
+        degenerate = np.array([0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0], dtype=np.int64)
+
+        p1 = tmp_path / "h.npy"
+        p2 = tmp_path / "d.npy"
+        np.save(str(p1), healthy)
+        np.save(str(p2), degenerate)
+
+        stats = compute_corpus_stats_streaming([p1, p2])
+        assert stats["degenerate_count"] == 1
+        assert stats["degenerate_rate"] == pytest.approx(0.5)
+
+    def test_empty_input(self):
+        """Empty list returns zero-filled stats."""
+        stats = compute_corpus_stats_streaming([])
+        assert stats["total_samples"] == 0
+        assert stats["degenerate_count"] == 0
+        assert stats["phoneme_duration_stats"]["mean"] == 0.0
+
+    def test_single_utterance(self, tmp_path):
+        """Single-file streaming produces correct results."""
+        dur = np.array([0, 7, 0, 3, 0, 12, 0], dtype=np.int64)
+        p = tmp_path / "single.npy"
+        np.save(str(p), dur)
+
+        stats = compute_corpus_stats_streaming([p])
+        assert stats["total_samples"] == 1
+        assert stats["degenerate_count"] == 0
+        assert stats["phoneme_duration_stats"]["mean"] == pytest.approx(
+            np.mean([7, 3, 12]), abs=1e-6
+        )
+
+    def test_no_median_key(self, tmp_path):
+        """Streaming stats omit median (cannot be computed in streaming)."""
+        dur = np.array([0, 5, 0, 10, 0], dtype=np.int64)
+        p = tmp_path / "d.npy"
+        np.save(str(p), dur)
+
+        stats = compute_corpus_stats_streaming([p])
+        assert "median" not in stats["phoneme_duration_stats"]
 
 
 # ===========================================================================

@@ -172,6 +172,103 @@ def compute_corpus_stats(all_durations: list[np.ndarray]) -> dict:
     }
 
 
+def compute_corpus_stats_streaming(duration_paths: list) -> dict:
+    """Memory-efficient streaming corpus statistics using Welford's algorithm.
+
+    Instead of loading all duration arrays into memory at once, processes
+    each file one at a time and computes running statistics.
+
+    Args:
+        duration_paths: List of ``Path`` objects pointing to ``.npy`` duration
+            files.
+
+    Returns:
+        Dictionary with the same keys as :func:`compute_corpus_stats`:
+
+        - ``total_samples``: Number of utterances processed.
+        - ``degenerate_count``: Number of degenerate utterances.
+        - ``degenerate_rate``: Fraction of degenerate utterances.
+        - ``phoneme_duration_stats``: ``{mean, std, pct_le1, pct_le2}``
+          computed over all phoneme positions across the corpus (median is
+          omitted since it cannot be computed in a streaming fashion).
+        - ``blank_stats``: ``{mean_blank0, all_zero_rate}``.
+    """
+    total = 0
+    degenerate_count = 0
+
+    # Welford's online algorithm for mean/variance of phoneme durations
+    ph_count = 0  # total number of phoneme positions
+    ph_mean = 0.0
+    ph_m2 = 0.0  # sum of squared deviations
+    ph_le1_count = 0
+    ph_le2_count = 0
+
+    blank0_sum = 0.0
+    all_blank_zero_count = 0
+
+    for path in duration_paths:
+        dur = np.load(str(path))
+        total += 1
+
+        if is_degenerate(dur):
+            degenerate_count += 1
+
+        ph_durs = dur[1::2]
+        for d in ph_durs:
+            ph_count += 1
+            delta = float(d) - ph_mean
+            ph_mean += delta / ph_count
+            delta2 = float(d) - ph_mean
+            ph_m2 += delta * delta2
+
+            if d <= 1:
+                ph_le1_count += 1
+            if d <= 2:
+                ph_le2_count += 1
+
+        blank0_sum += int(dur[0]) if len(dur) > 0 else 0
+
+        blank_durs = dur[0::2]
+        if len(blank_durs) > 0 and np.all(blank_durs == 0):
+            all_blank_zero_count += 1
+
+    if total == 0:
+        return {
+            "total_samples": 0,
+            "degenerate_count": 0,
+            "degenerate_rate": 0.0,
+            "phoneme_duration_stats": {
+                "mean": 0.0,
+                "std": 0.0,
+                "pct_le1": 0.0,
+                "pct_le2": 0.0,
+            },
+            "blank_stats": {
+                "mean_blank0": 0.0,
+                "all_zero_rate": 0.0,
+            },
+        }
+
+    ph_std = (ph_m2 / ph_count) ** 0.5 if ph_count > 0 else 0.0
+    ph_stats = {
+        "mean": ph_mean if ph_count > 0 else 0.0,
+        "std": ph_std,
+        "pct_le1": ph_le1_count / ph_count if ph_count > 0 else 0.0,
+        "pct_le2": ph_le2_count / ph_count if ph_count > 0 else 0.0,
+    }
+
+    return {
+        "total_samples": total,
+        "degenerate_count": degenerate_count,
+        "degenerate_rate": degenerate_count / total,
+        "phoneme_duration_stats": ph_stats,
+        "blank_stats": {
+            "mean_blank0": blank0_sum / total,
+            "all_zero_rate": all_blank_zero_count / total,
+        },
+    }
+
+
 def compute_phoneme_class_stats(
     durations: np.ndarray,
     phoneme_ids: list[int],
