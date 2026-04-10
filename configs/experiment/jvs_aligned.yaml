@@ -1,0 +1,47 @@
+# @package _global_
+
+# Japanese multi-speaker TTS with JVS corpus using pre-computed Julius durations
+# MASをバイパスし、外部アライナーの正確なdurationで学習する
+# To execute: python matcha/train.py experiment=jvs_aligned
+
+defaults:
+  - override /data: jvs_precomputed.yaml
+  - override /trainer: ddp_optimized.yaml
+  - override /callbacks: default.yaml
+
+tags: ["jvs", "japanese", "multispeaker", "aligned"]
+
+run_name: jvs_aligned
+
+# Data: duration読み込みを有効化
+data:
+  load_durations: true
+
+# Model: MASバイパス + precomputed durations使用
+model:
+  n_vocab: 55
+  use_precomputed_durations: true
+
+compile_model: true
+compile_mode: "default"
+gradient_checkpointing: false
+
+callbacks:
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "loss/val"
+    patience: 30
+    min_delta: 0.001
+    mode: "min"
+    check_finite: true
+    verbose: true
+  ema:
+    _target_: lightning.pytorch.callbacks.EMAWeightAveraging
+    decay: 0.9995
+    update_every_n_steps: 1
+    update_starting_at_epoch: 10
+
+trainer:
+  max_epochs: 2500
+  check_val_every_n_epoch: 10
+  precision: "32-true"
