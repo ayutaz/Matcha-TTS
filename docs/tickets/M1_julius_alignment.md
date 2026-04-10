@@ -119,10 +119,29 @@ echo "Setup complete. segmentation-kit at: ${SEGKIT_DIR}"
 #### 2.2 JVS転記テキストの準備
 
 JVSコーパスの転記テキストフォーマット:
-- `jvs_ver1/jvsXXX/parallel100/transcripts_utf8.txt`: 漢字かな混じり文
+- `jvs_ver1/jvsXXX/parallel100/transcripts_utf8.txt`: **漢字かな混じり文**を含む（例: "今日は天気がいいです"）
 - `jvs_ver1/jvsXXX/parallel100/VOICEACTRESS100_001.txt`等: 個別テキストファイル（存在する場合）
 
 Juliusのsegmentation-kitはひらがなテキストを必要とする。JVSにはひらがな転記が含まれている場合と含まれていない場合がある。含まれていない場合はpyopenjtalkで漢字→ひらがな変換を行う。
+
+**テキスト形式の変換に関する注意事項**:
+- `pyopenjtalk.g2p(text, kana=True)`は**カタカナ**を出力する（ひらがなではない）。例: "こんにちは" → "コンニチワ"
+- segmentation-kitが期待するテキスト形式（カタカナ、ひらがな、ローマ字のいずれか）を最初のステップで確認すること
+- segmentation-kitがひらがなのみを受け付ける場合、カタカナ→ひらがな変換が必要:
+  ```python
+  # カタカナ→ひらがな変換のフォールバック処理
+  import unicodedata
+  def katakana_to_hiragana(text: str) -> str:
+      result = []
+      for ch in text:
+          cp = ord(ch)
+          if 0x30A1 <= cp <= 0x30F6:  # ァ-ヶ
+              result.append(chr(cp - 0x60))
+          else:
+              result.append(ch)
+      return "".join(result)
+  ```
+- segmentation-kitがカタカナを直接受け付ける場合は、`pyopenjtalk.g2p(text, kana=True)`の出力をそのまま使用可能
 
 **作成ファイル**: `scripts/prepare_julius_input.py`
 
@@ -296,6 +315,36 @@ echo "All speakers processed. Output: ${OUTPUT_DIR}"
 
 **注意**: Julius segmentation-kitの実際のインターフェースはバージョンにより異なる。`segment_julius.pl`のパラメータ、ディレクトリ構造、音響モデルのパス等は実際のインストール後に調整が必要。
 
+**segmentation-kitのインターフェースに関する重要事項**:
+
+segmentation-kitには2つの可能なインターフェースが存在する:
+
+1. **ディレクトリ方式**（公式READMEに記載されている可能性が高い）: `wav/`と`txt/`ディレクトリにファイルを配置し、`segment_julius.pl`を引数なしで実行する方式。この場合、上記の`run_julius_alignment.sh`のコマンドライン引数方式は動作しない。
+   ```bash
+   # ディレクトリ方式の場合
+   cd tools/segmentation-kit
+   # wav/ と txt/ に入力ファイルを配置
+   perl segment_julius.pl
+   ```
+
+2. **引数方式**: 上記スクリプト例のように、wavファイルとテキストファイルのパスを引数として渡す方式。バージョンやフォークによっては対応している場合がある。
+
+**最初のステップとして、segmentation-kitのREADMEおよび`segment_julius.pl`のソースを確認し、実際のインターフェースを確定すること**。ディレクトリ方式の場合は、`prepare_julius_input.py`の出力構造をsegmentation-kitの期待するディレクトリ構造（`wav/`、`txt/`）に合わせるか、話者ごとにシンボリックリンクを作成する方式に変更する。
+
+**フォールバック計画**: Juliusの環境構築に深刻な問題が発生した場合（segmentation-kitのPerl依存解決不能、音響モデル非互換等）、MFA（Montreal Forced Aligner）日本語モデルv2.0.1aにフォールバックする。具体的な手順:
+- `pip install montreal-forced-aligner`
+- MFA日本語pretrained modelのダウンロード: `mfa model download acoustic japanese_mfa`
+- JVSのIPA転記生成（pyopenjtalk→IPA変換スクリプトの追加実装が必要）
+- 既知問題: MFA GitHub issue #541（JVS特有の問題報告あり）のため、事前にissueの状況を確認すること
+
+**Docker化による再現性確保（推奨）**: Julius segmentation-kitはPerl依存があり、環境差異によるトラブルが予想される。以下のDockerfileによる再現可能な環境構築を推奨する:
+```dockerfile
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y julius perl sox
+COPY tools/segmentation-kit /opt/segmentation-kit
+WORKDIR /opt/segmentation-kit
+```
+
 #### 2.4 .labファイルの期待フォーマット
 
 Julius segmentation-kitの出力`.lab`ファイルは、HTK形式のラベルファイル:
@@ -362,6 +411,7 @@ data/julius_alignment/
 | `test_resample_to_16k_output_sample_rate` | 出力WAVが16kHzであること |
 | `test_resample_to_16k_mono` | ステレオ入力がモノラルに変換されること |
 | `test_resample_to_16k_preserves_duration` | リサンプリング前後で音声長が保たれること（許容誤差: 10ms以内） |
+| `test_jvs_all_utterances_text_conversion_success` | JVS全発話のテキスト変換（漢字かな混じり→ひらがな/カタカナ）が成功率100%であること |
 
 #### 統合テスト
 
@@ -375,6 +425,7 @@ data/julius_alignment/
 | `test_lab_timestamps_cover_audio_duration` | `.lab`の最終時刻が音声ファイルの長さと概ね一致すること（許容誤差: 50ms） |
 | `test_lab_phonemes_are_nonempty` | 各セグメントの音素ラベルが空でないこと |
 | `test_alignment_success_rate_above_threshold` | アライメント成功率が99%以上であること |
+| `test_segmentation_kit_interface_confirmed` | segmentation-kitのREADMEを確認し、実際のインターフェース（ディレクトリ方式 or 引数方式）が確定していること |
 
 ### 5. 懸念事項とレビュー項目
 
@@ -766,14 +817,17 @@ pyopenjtalk 55シンボルには無声化母音（A, I, U, E, O）が含まれ�
 
 #### 2.1 核となるフレーム変換ロジック
 
-**時刻→フレーム数変換**:
+**時刻→フレーム数変換（絶対時刻ベース）**:
 ```
-frames = round((end_time - start_time) * sample_rate / hop_length)
+start_frame = round(start_time * sample_rate / hop_length)
+end_frame = round(end_time * sample_rate / hop_length)
+duration = end_frame - start_frame
 ```
 - `sample_rate = 22050` (Matcha-TTSのメルスペクトログラム)
 - `hop_length = 256`
 - Juliusの時刻単位: 100ns (10^-7秒) → 秒に変換: `time_sec = time_100ns / 10_000_000`
 - **注意**: Julius入力は16kHzだが、フレーム変換はMatcha-TTSのメル計算パラメータ（22050Hz / hop_length=256）で行う
+- **重要**: 相対計算（`frames = round((end - start) * sr / hop)`）ではなく絶対時刻ベースの計算を採用する。相対計算では各セグメントの`round()`で累積丸め誤差が発生するが、絶対時刻ベースでは各セグメントの開始/終了フレームを独立に計算するため、全セグメントのduration合計が自動的にメルフレーム数に近づく
 
 #### 2.2 音素列の位置合わせ問題
 
@@ -877,13 +931,17 @@ def parse_lab_file(lab_path: Path) -> list[tuple[float, float, str]]:
 
 
 def time_to_frames(start_sec: float, end_sec: float) -> int:
-    """時刻区間をメルフレーム数に変換する。
+    """時刻区間をメルフレーム数に変換する（絶対時刻ベース）。
 
-    frames = round((end - start) * sample_rate / hop_length)
+    累積丸め誤差を回避するため、開始/終了フレームを絶対時刻から独立に計算し、
+    その差分をdurationとする。
+    start_frame = round(start_time * sample_rate / hop_length)
+    end_frame = round(end_time * sample_rate / hop_length)
+    duration = end_frame - start_frame
     """
-    duration_sec = end_sec - start_sec
-    frames = round(duration_sec * SAMPLE_RATE / HOP_LENGTH)
-    return max(0, frames)
+    start_frame = round(start_sec * SAMPLE_RATE / HOP_LENGTH)
+    end_frame = round(end_sec * SAMPLE_RATE / HOP_LENGTH)
+    return max(0, end_frame - start_frame)
 
 
 def align_julius_with_pyopenjtalk(
@@ -939,12 +997,88 @@ def align_julius_with_pyopenjtalk(
             if j_ph == py_ph_lower or j_ph == py_ph:
                 result.append(julius_durations[j_idx])
                 j_idx += 1
+            elif py_ph in ("A", "I", "U", "E", "O"):
+                # 無声化母音マッチング: Juliusが無声化母音セグメントを
+                # 省略した可能性がある場合、duration=0を割り当てる
+                # （Juliusは無声化母音を極端に短く出力するか省略することがある）
+                log.warning(
+                    "Devoiced vowel '%s' not found in Julius output at index %d "
+                    "(julius='%s'). Assigning duration=0", py_ph, j_idx, j_ph
+                )
+                result.append(0)
+                # j_idxは進めない（Juliusがこの音素を出力していないため）
             else:
                 log.warning(
                     "Phoneme mismatch: julius='%s' vs pyopenjtalk='%s'. "
                     "Assigning duration=1", j_ph, py_ph
                 )
                 result.append(1)
+
+    return result
+
+
+def align_julius_with_pyopenjtalk_dtw(
+    julius_phonemes: list[str],
+    pyopenjtalk_phonemes: list[str],
+    julius_durations: list[int],
+) -> list[int]:
+    """DTWフォールバック: 逐次照合で不一致率が高い場合に使用する。
+
+    音素シーケンス間のDTW（Dynamic Time Warping）アライメントにより、
+    音素の挿入・削除・置換を許容した柔軟な位置合わせを行う。
+
+    逐次照合（align_julius_with_pyopenjtalk）で不一致率が5%を超える場合に
+    この関数にフォールバックする。
+    """
+    # pyopenjtalkから韻律記号を除去して実音素列を取得
+    py_real = [(i, ph) for i, ph in enumerate(pyopenjtalk_phonemes)
+               if ph not in PROSODY_SYMBOLS]
+
+    # DTWコスト行列を構築（一致=0、無声化母音照合=0、不一致=1）
+    n, m = len(julius_phonemes), len(py_real)
+    cost = np.full((n + 1, m + 1), float("inf"))
+    cost[0, 0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            j_ph = julius_phonemes[i - 1]
+            py_ph = py_real[j - 1][1]
+            py_lower = py_ph.lower() if py_ph in ("A", "I", "U", "E", "O") else py_ph
+            match_cost = 0.0 if (j_ph == py_lower or j_ph == py_ph) else 1.0
+            cost[i, j] = match_cost + min(
+                cost[i - 1, j - 1],  # 対角: 1対1マッチ
+                cost[i - 1, j] + 0.5,  # Julius側スキップ（削除）
+                cost[i, j - 1] + 0.5,  # pyopenjtalk側スキップ（挿入）
+            )
+
+    # バックトラックでアライメントを復元
+    alignment = {}  # py_real_index -> julius_index
+    i, j = n, m
+    while i > 0 and j > 0:
+        j_ph = julius_phonemes[i - 1]
+        py_ph = py_real[j - 1][1]
+        py_lower = py_ph.lower() if py_ph in ("A", "I", "U", "E", "O") else py_ph
+        match_cost = 0.0 if (j_ph == py_lower or j_ph == py_ph) else 1.0
+        if cost[i, j] == match_cost + cost[i - 1, j - 1]:
+            alignment[j - 1] = i - 1
+            i -= 1
+            j -= 1
+        elif cost[i, j] == cost[i - 1, j] + 0.5:
+            i -= 1
+        else:
+            j -= 1
+
+    # pyopenjtalk全音素列にdurationを割り当て
+    result = []
+    real_idx = 0
+    for py_ph in pyopenjtalk_phonemes:
+        if py_ph in PROSODY_SYMBOLS:
+            result.append(0)
+        else:
+            if real_idx in alignment:
+                result.append(julius_durations[alignment[real_idx]])
+            else:
+                result.append(0)
+            real_idx += 1
 
     return result
 
@@ -1108,6 +1242,11 @@ data/jvs_durations/
 | `test_align_julius_with_pyopenjtalk_with_prosody` | 韻律記号（^, [, ], $）にduration=0が割り当てられること |
 | `test_align_julius_with_pyopenjtalk_with_pause` | `_`（pau）にJuliusのpaudurationが割り当てられること |
 | `test_align_devoiced_vowels` | 無声化母音（A,I,U,E,O）がJuliusの通常母音と正しく照合されること |
+| `test_prosody_bracket_between_phonemes` | `[` が2つの通常音素の間に挿入されるケース（例: `k o [N n i ch i w a`）でJuliusインデックスがずれないこと |
+| `test_prosody_hash_at_accent_boundary` | `#` がアクセント句境界に出現するケースでduration=0が割り当てられ、前後の音素durationが正しいこと |
+| `test_multiple_prosody_consecutive` | 韻律記号が連続するケース（例: `] #`）で各記号にduration=0が割り当てられ、Juliusインデックスが正しく維持されること |
+| `test_prosody_symbols_duration_zero` | 全韻律記号(^,$,?,_,#,[,])のdurationが0であることの検証（`_`がpauに対応する場合を除く） |
+| `test_align_devoiced_vowel_missing_in_julius` | Juliusが無声化母音セグメントを出力しない場合にduration=0が割り当てられること |
 | `test_build_duration_array_with_blanks_length` | 音素数Nに対してduration配列長が2N+1であること |
 | `test_build_duration_array_with_blanks_blank_positions` | 偶数インデックス（blank位置）のdurationが0であること |
 | `test_build_duration_array_with_blanks_sum_matches_mel` | duration合計がtotal_mel_framesと一致すること |
@@ -1136,8 +1275,10 @@ data/jvs_durations/
 |------|-------|------|
 | pyopenjtalkの出力がテキストにより非決定的な場合がある | 高 | `text_to_sequence`の出力を.ptファイルの`cleaned_text`と照合し、一致を確認 |
 | 韻律記号（^,$等）とJuliusのsilB/silEの対応が発話によっては1対1でない | 高 | 文頭`^`→silB、文末`$`→silEの固定対応を基本とし、例外を個別ログ出力 |
-| 累積丸め誤差が一部の長い発話で大きくなる | 中 | 各セグメントの開始/終了フレームを絶対時刻から計算し、差分でdurationを求める（相対計算を避ける） |
+| 累積丸め誤差が一部の長い発話で大きくなる | 中 | 絶対時刻ベースのフレーム変換を初期実装で採用済み（セクション2.1参照）。各セグメントの開始/終了フレームを絶対時刻から独立に計算し、差分でdurationを求める |
 | 無声化母音のマッチ失敗 | 中 | pyopenjtalkの無声化母音（大文字）をJuliusの通常母音（小文字）と照合する明示的ロジック |
+| Juliusが無声化母音セグメントを極端に短く出力するか省略する可能性 | 中 | pyopenjtalkのA,I,U,E,OをJuliusの小文字母音と照合する際、Juliusが当該セグメントを出力しない場合はduration=0を割り当てる。不一致率5%超の場合、音素シーケンス間のDTWアライメントにフォールバック |
+| 韻律記号の挿入位置がJuliusインデックスとの対応関係を破綻させるリスク | 高 | pyopenjtalkの韻律記号（^,$,?,_,#,[,]）は音素間に挿入されるため、逐次照合時にJulius側のインデックスを進めてはならない。特に`[`や`#`がアクセント句境界で連続出現する場合に注意。韻律記号スキップ後のJuliusインデックス整合性を全テストケースで検証する |
 | JVS一部発話でpyopenjtalkとJuliusの音素数が一致しない | 高 | 不一致サンプルをエラーログに出力し、除外リストを生成。T-M1-04で分析 |
 
 #### コードレビュー項目
@@ -1151,7 +1292,7 @@ data/jvs_durations/
 
 ### 6. 一から作り直すとしたら
 
-**フレーム変換を相対ではなく絶対時刻ベースで行う**。現在の設計では`frames = round((end - start) * sr / hop)`を各セグメントに適用しているが、これは累積丸め誤差の原因になる。代わりに、各セグメントの開始/終了フレームを`start_frame = round(start * sr / hop)`、`end_frame = round(end * sr / hop)`で計算し、`duration = end_frame - start_frame`とする。これで全セグメントのduration合計が自動的にメルフレーム数に近づく。
+**フレーム変換を相対ではなく絶対時刻ベースで行う** → **初期実装で採用済み**。各セグメントの開始/終了フレームを`start_frame = round(start * sr / hop)`、`end_frame = round(end * sr / hop)`で計算し、`duration = end_frame - start_frame`とする方式を、セクション2.1の`time_to_frames`関数に反映済み。これにより累積丸め誤差が回避され、全セグメントのduration合計が自動的にメルフレーム数に近づく。
 
 **位置合わせをDTW（Dynamic Time Warping）で行う**。現在の逐次照合ロジックは、pyopenjtalkとJuliusの音素列がほぼ同一構造であることを前提としている。実際にはpyopenjtalkの音素分割とJuliusの音素分割が微妙に異なるケース（例: 「っ」の扱い、長母音の分割）がありうる。DTWを使えばこうした差異を吸収できるが、計算コストとコード複雑性が増す。10,000発話程度なら逐次照合で問題ないが、不一致率が5%を超える場合はDTWへの切り替えを検討する。
 
