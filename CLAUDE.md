@@ -173,9 +173,15 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 - **torch.empty（out_size切り出し）**: 未初期化メモリでNaN混入 → torch.zeros必須
 - **LR 5e-4 + weight_decay=0.01**: 原論文より攻撃的すぎて不安定
 
-### MASアライメント退化問題（未解決、2026-04-10確認）
+### MASアライメント退化問題（2026-04-10確認、対策決定済み）
 
 100話者JVS学習において、MAS（Monotonic Alignment Search）が構造的に退化アライメントを生成する問題が確認された。**学習量を増やしても改善しない**（500ep→2500epで悪化: 39.2%→43.0%）。
+
+#### 根本原因: MASは多話者TTSに不向き
+
+MASはlog_prior（ガウシアン距離 `-½||y - μ_x||²`）に基づく貪欲DPアルゴリズムであり、正しく機能するにはencoder出力μ_xがphonemeごとに十分異なる表現を持つ必要がある。多話者設定ではencoderが100人分の音声特性を同一空間に圧縮するため、μ_xが平均化されblank/phonemeの区別が消失する。
+
+**日本語55音素がMAS退化を加速**: 英語VCTKでは178音素（細粒度）のためμ_xの区別が容易でMAS退化は報告されていない。日本語55音素は粗粒度でモーラ寄りのため、音素間の音響差が小さくMAS退化を誘発しやすい。
 
 #### 症状
 - 学習サンプルの**39-43%でMASアライメントが退化**（phonemeの80%以上が1フレーム）
@@ -185,10 +191,10 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 
 #### 原因チェーン
 ```
-Encoderのmu_xがblankとphonemeで類似（std差 <0.05）
-  → MASのlog_prior計算でblank位置がphonemeと同等のスコアを得る
-    → MASの貪欲DPがblankにフレームを大量割当（monotonicity制約下で合理的）
-      → Duration Predictorが退化ターゲットを学習（detachにより encoder→DP勾配なし）
+① Encoderのmu_xがblankとphonemeで類似（多話者で表現が平均化、日本語55音素で粒度不足）
+  → ② MASのlog_prior計算でblank位置がphonemeと同等のスコアを得る
+    → ③ MASの貪欲DPがblankにフレームを大量割当（monotonicity制約下で合理的）
+      → ④ Duration Predictorが退化ターゲットを学習（detach + 話者条件付けなし）
 ```
 
 #### 検証済みの数値
@@ -205,17 +211,114 @@ Encoderのmu_xがblankとphonemeで類似（std差 <0.05）
 - JVS 2500ep: 240Kステップ（原論文の48%）→ MAS退化率**43.0%（悪化）**
 - 5倍の学習でも改善なし → アルゴリズムレベルの問題
 
-#### 既知の関連情報（文献調査）
-- MAS + 決定論的Duration Predictorの組合せは**平均回帰バイアス**が既知（Lajszczak et al., 2024）
-- Alphacephei分析: 「MASは大規模単一話者DBでは機能するが、多様なデータでは失敗が予想される」
-- VITS式確率的Duration Predictorが有効な代替案（GitHub issue #125）
-- F5-TTSはDuration Predictorを完全に廃止（DiTによる暗黙的アライメント）
+#### 外部裏付け情報（15エージェント調査、2026-04-10）
 
-#### 候補対策（未実装）
-1. **MASにblankペナルティ追加**: log_priorのblank位置にバイアス項を追加し、phonemeへのフレーム割当を促進。最もシンプルで低リスク
-2. **外部アライナーによる事前計算duration**: Montreal Forced Aligner等で正確なdurationを計算し`use_precomputed_durations=true`で使用。MASをバイパス
-3. **確率的Duration Predictor（VITS式）**: normalizing flowsでduration分布をモデル化。アーキテクチャ変更が必要だが根本的解決
-4. **Duration Predictorの直接話者条件付け**: FiLMレイヤーまたは話者projectionをDP内に追加（現在はdetachされたencoder出力経由のみ）
+| 情報源 | 内容 |
+|--------|------|
+| Alphacephei分析 (2025/01) | 「MASは多様なデータでは失敗する。現代TTSにはASRアライナーが必要」「DPがspeaker embeddingを使わないことが大きな問題」 |
+| Grad-TTS著者 (GitHub #37) | 多話者チェックポイントは「proof-of-concept、品質保証なし」 |
+| Matcha-TTS著者Mehta (GitHub #125) | `stoc_dur`ブランチで確率的DP実装済み |
+| Glow-TTS著者 (GitHub #43) | blank挿入に「理論的根拠はない」 |
+| Lajszczak et al. (2024) | MAS+決定論的DPの平均回帰バイアスを実証 |
+| JATTS toolkit (名古屋大/戸田研) | Julius forced aligner + Matcha-TTSの日本語パイプライン実証済み |
+| Style-BERT-VITS2 | 確率的DP（MAS退化の影響を受けにくい）でMOS 4.37達成 |
+| Matcha-TTS VCTK設定 | MAS退化対策は一切なし、論文での多話者評価もなし |
+| NVIDIA RAD-TTS | HMM forward-sum + beta-binomial priorで247話者LibriTTS安定動作 |
+
+#### 対策方針: 外部アライナーによるduration事前計算（決定済み）
+
+MASをバイパスし、外部forced alignerで正確なphoneme durationを事前計算して`use_precomputed_durations=true`で学習する。
+
+**選定理由**:
+- MAS退化の根本原因（アルゴリズム自体の多話者不適合）を完全に回避
+- JATTSがJulius + Matcha-TTSの日本語パイプラインを実証済み
+- ESPnet JVSレシピもMFA/teacher forcingでduration抽出（MAS非使用）
+- コードベースに`use_precomputed_durations=True`のパスが既存（`matcha_tts.py` L193）
+- アーキテクチャ変更不要で最もlow-risk
+
+**検討した代替案と不採用理由**:
+
+| 対策 | 不採用理由 |
+|------|-----------|
+| MAS blankペナルティ | 対症療法。先行実装なし。ペナルティ値のチューニングが必要で効果不確実 |
+| 確率的DP（VITS式/stoc_dur） | MAS退化ターゲット自体は変わらない。外部アライナーとの併用が前提 |
+| F5-TTS式Duration-free | モデルの70-80%書き直しが必要。コスト過大 |
+| NVIDIA RAD-TTS式Forward-Sum | アーキテクチャ変更大。CFMデコーダとの組合せ未検証 |
+| VITS2式MASノイズ注入 | 効果は+0.15 MOS程度。根本解決にならない |
+
+#### 追加改善（外部アライナーと併せて実施予定）
+
+1. **DPにFiLM話者条件付け追加**（~20行）: Alphacephei指摘の構造的欠陥を修正
+2. **Blank embedding zero-init**（1行）: blank/phonemeの初期分離を促進
+
+### 外部アライナー実装計画
+
+#### アライナー選択: Julius forced aligner
+
+| 候補 | 長所 | 短所 | 採用 |
+|------|------|------|------|
+| **Julius** | 日本語ネイティブ、JATTS実証済み、10ms精度 | 音素セットがpyopenjtalkと異なる | **○** |
+| MFA | pretrained日本語モデルv2.0.1a | JVS issue #541、IPA→ローマ字マッピング必要 | △ |
+| pyJuliusAlign | Julius wrapper、Python API | TTS用パイプライン自作必要 | △ |
+
+#### 実装手順
+
+1. **Julius segmentation-kitでJVSをアライメント**
+   - julius-speech/segmentation-kitを使用
+   - JVS各発話の.wavとひらがな転記を入力 → `.lab`ファイル（phoneme開始/終了時刻）を出力
+   - 10ms精度（hop_length=256/22050Hz=11.6msとほぼ一致）
+
+2. **音素セットのマッピング**
+   - Julius音素 → pyopenjtalk 55シンボルへの変換テーブル作成
+   - 主な差異: 促音(cl)、撥音(N)、ポーズ(pau/sil)、韻律記号(^,$,?,_,#,[,])
+   - blank挿入（intersperse）後のシーケンス長との整合性確認
+
+3. **Duration配列の生成**
+   - `.lab`の時刻情報をフレーム数に変換: `frames = (end_time - start_time) * sr / hop_length`
+   - blank位置のduration設定（0 or 1フレーム）
+   - intersperse後の音素列長と一致するようduration配列を構成
+
+4. **PrecomputedDataModuleの修正**
+   - 現在`"durations": None`をハードコード → `.pt`ファイルに`"durations"`キーを追加
+   - `precompute_dataset.py`にduration埋め込み機能を追加
+
+5. **学習設定**
+   - `model.use_precomputed_durations=true`
+   - MASブロック（matcha_tts.py L196-208）がスキップされ、`generate_path(durations)`で直接アライメント生成
+   - prior_loss、dur_lossは維持（DPの学習に正確なターゲットが供給される）
+
+#### 参考実装
+- **JATTS** (unilight/jatts): `matchatts.py`（TTS1）がJulius duration + Matcha-TTSを実装
+- **ESPnet** (egs2/jvs/tts1): `scripts/mfa.sh`でMFAアライメント、FastSpeech2に供給
+- **Matcha-TTS upstream**: `matcha/utils/get_durations_from_trained_model.py`でMAS durationを.npy保存する既存機能あり
+
+#### 既存コードパスの確認
+- **TextMelDataModule**: `load_durations=True` → `data_dir/durations/{name}.npy`を読み込み
+- **PrecomputedDataModule**: `"durations": None`をハードコード（**要修正**）
+- **モデル側**: `use_precomputed_durations=True` → `generate_path(durations)`でMASバイパス（matcha_tts.py L193-194）
+- **設定**: `configs/model/matcha.yaml`に`use_precomputed_durations: ${data.load_durations}`
+
+### 日本語TTS先行実装の参考情報（2026-04-10調査）
+
+#### 日本語Matcha-TTS実装
+| プロジェクト | 概要 | MAS対策 |
+|-------------|------|---------|
+| **JATTS** (unilight/jatts, 名古屋大/戸田研) | JVS 100話者対応。TTS1=Julius forced alignment、TTS2=MAS。Matcha-TTS/VITS実装 | TTS1でJuliusによるMASバイパス |
+| **akjava/Matcha-TTS-Japanese** | 単話者（合成音声~100発話）。英語178シンボルテーブル流用。ONNX推論特化 | なし |
+| **Fusic Zenn記事** | 英語モデルからITA 381文でfine-tune | なし |
+
+#### 日本語多話者TTSの成功手法
+| プロジェクト | 手法 | アライメント | 品質 |
+|-------------|------|-------------|------|
+| **Style-BERT-VITS2** (JP-Extra) | VITS + 確率的DP + WavLM識別器 | MAS（確率的DPで退化影響軽減） | MOS 4.37 |
+| **ESPnet JVS** (egs2/jvs/tts1) | FastSpeech2 / VITS | MFA or teacher forcing | 研究ベンチマーク |
+| **VOICEVOX** | 独自アーキテクチャ（分離型） | 別モデルでduration予測（MASなし） | 商用品質 |
+| **Matxa-TTS** (カタルーニャ語47話者) | Matcha-TTS（VCTKからfine-tune） | MAS（そのまま） | 実用レベル |
+
+#### Matcha-TTS公式多話者の状況
+- **VCTKモデル（108話者）**: 公開済みだが論文での評価なし（Future Workに「多話者対応」と記載）
+- **VCTK設定**: LJSpeechと完全同一。MAS退化対策は一切なし
+- **英語178音素 vs 日本語55音素**: 英語は音素粒度が細かくμ_xの区別が容易なためMAS退化が起きにくい
 
 ### JVSデータの注意点
 - **無音トリミング必須**: JVSコーパスは各発話の先頭/末尾に~500msの無音を含む。`prepare_jvs.py`で自動トリミング（`top_db=30`、50msマージン）

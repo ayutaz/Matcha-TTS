@@ -34,8 +34,8 @@ class TestJvsFastConfig:
         assert jvs_fast_config["gradient_checkpointing"] is False
 
     def test_max_epochs(self, jvs_fast_config):
-        """max_epochs should remain at 500."""
-        assert jvs_fast_config["trainer"]["max_epochs"] == 500
+        """max_epochs should be 2500 (paper-equivalent ~240K steps for 100 speakers)."""
+        assert jvs_fast_config["trainer"]["max_epochs"] == 2500
 
     def test_check_val_every_n_epoch(self, jvs_fast_config):
         """check_val_every_n_epoch should be 10 for effective early stopping."""
@@ -50,8 +50,8 @@ class TestJvsFastConfig:
         assert "scheduler" not in jvs_fast_config.get("model", {})
 
     def test_early_stopping_patience(self, jvs_fast_config):
-        """patience should be 15 (effective 150 epochs with check_every=10)."""
-        assert jvs_fast_config["callbacks"]["early_stopping"]["patience"] == 15
+        """patience should be 30 (effective 300 epochs with check_every=10)."""
+        assert jvs_fast_config["callbacks"]["early_stopping"]["patience"] == 30
 
     def test_ema_start_epoch_10(self, jvs_fast_config):
         """EMA should start at epoch 10 (paper-faithful)."""
