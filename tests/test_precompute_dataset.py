@@ -14,12 +14,12 @@ from precompute_dataset import load_duration, parse_filelist
 
 class TestLoadDuration:
     def test_valid_duration(self, tmp_path):
-        """正常な.npyファイルでIntTensorが返ること"""
+        """正常な.npyファイルでint64 Tensorが返ること"""
         dur = np.array([0, 5, 0, 3, 0, 7, 0], dtype=np.int64)
         np.save(tmp_path / "jvs001_UTT001.npy", dur)
         result = load_duration(tmp_path, "jvs001", "UTT001", 7)
         assert isinstance(result, torch.Tensor)
-        assert result.dtype == torch.int32
+        assert result.dtype == torch.int64
         assert len(result) == 7
 
     def test_missing_file_returns_none(self, tmp_path):
@@ -34,12 +34,36 @@ class TestLoadDuration:
         with pytest.raises(ValueError, match="Duration length mismatch"):
             load_duration(tmp_path, "jvs001", "UTT001", 7)
 
-    def test_int64_to_int32_conversion(self, tmp_path):
-        """int64 npyがint32 tensorに変換されること"""
+    def test_dtype_is_int64(self, tmp_path):
+        """int64 npyがint64 tensorとして返ること（collateのtorch.longと一致）"""
         dur = np.array([0, 10, 0], dtype=np.int64)
         np.save(tmp_path / "jvs001_UTT001.npy", dur)
         result = load_duration(tmp_path, "jvs001", "UTT001", 3)
-        assert result.dtype == torch.int32
+        assert result.dtype == torch.int64
+
+    def test_duration_sum_mismatch_raises(self, tmp_path):
+        """duration合計がmel_framesと一致しない場合にValueError"""
+        dur = np.array([0, 5, 0, 3, 0], dtype=np.int64)  # sum=8
+        np.save(tmp_path / "jvs001_UTT001.npy", dur)
+        with pytest.raises(ValueError, match="Duration sum mismatch"):
+            load_duration(tmp_path, "jvs001", "UTT001", 5, mel_frames=100)
+
+    def test_duration_sum_valid(self, tmp_path):
+        """duration合計がmel_framesと一致する場合に正常動作"""
+        dur = np.array([0, 5, 0, 3, 0, 7, 0], dtype=np.int64)  # sum=15
+        np.save(tmp_path / "jvs001_UTT001.npy", dur)
+        result = load_duration(tmp_path, "jvs001", "UTT001", 7, mel_frames=15)
+        assert isinstance(result, torch.Tensor)
+        assert result.sum().item() == 15
+
+    def test_duration_sum_none_skips_check(self, tmp_path):
+        """mel_frames=Noneでsum検証がスキップされること"""
+        dur = np.array([0, 5, 0, 3, 0], dtype=np.int64)  # sum=8
+        np.save(tmp_path / "jvs001_UTT001.npy", dur)
+        # mel_frames=None（デフォルト）ではsumチェックなし → 正常に返る
+        result = load_duration(tmp_path, "jvs001", "UTT001", 5)
+        assert isinstance(result, torch.Tensor)
+        assert len(result) == 5
 
 
 class TestParseFilelist:
@@ -81,11 +105,22 @@ class TestProcessSampleWithDuration:
         text_interspersed = intersperse(text_seq, 0)
         text_len = len(text_interspersed)
 
-        # ダミーduration作成
+        # melフレーム数を事前計算（duration sumと一致させるため）
+        audio_tensor = torch.from_numpy(audio_data).unsqueeze(0)
+        from matcha.utils.audio import mel_spectrogram as _mel_spec
+        mel_frames = _mel_spec(
+            audio_tensor, 1024, 80, 22050, 256, 1024, 0.0, 8000, center=False
+        ).squeeze().shape[-1]
+
+        # ダミーduration作成（sumがmel_framesと一致するよう分配）
         dur_dir = tmp_path / "durations"
         dur_dir.mkdir()
         dur = np.zeros(text_len, dtype=np.int64)
-        dur[1::2] = 5  # 音素位置に5フレームずつ
+        n_phonemes = len(dur[1::2])
+        base = mel_frames // n_phonemes
+        remainder = mel_frames % n_phonemes
+        dur[1::2] = base
+        dur[1:2 * remainder:2] += 1  # 余りを先頭音素に分配
         np.save(dur_dir / "jvs001_UTT001.npy", dur)
 
         # 実行

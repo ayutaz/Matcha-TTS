@@ -44,19 +44,27 @@ def parse_filelist(filelist_path: str):
     return filepaths_and_text
 
 
-def load_duration(durations_dir: Path, spk_name: str, stem: str, expected_text_len: int):
-    """Load a .npy duration file and validate length against text sequence."""
+def load_duration(durations_dir: Path, spk_name: str, stem: str, expected_text_len: int, mel_frames=None):
+    """Load a .npy duration file and validate against text sequence and mel length."""
     npy_name = f"{spk_name}_{stem}.npy"
     npy_path = durations_dir / npy_name
     if not npy_path.exists():
         return None
     dur = np.load(str(npy_path))
-    dur_tensor = torch.from_numpy(dur).int()
+    dur_tensor = torch.from_numpy(dur).long()  # int64 — collateのtorch.zeros(dtype=torch.long)と一致
     if len(dur_tensor) != expected_text_len:
         raise ValueError(
             f"Duration length mismatch for {npy_name}: "
             f"duration={len(dur_tensor)}, text={expected_text_len}"
         )
+    # B2: duration sum検証
+    if mel_frames is not None:
+        dur_sum = dur_tensor.sum().item()
+        if dur_sum != mel_frames:
+            raise ValueError(
+                f"Duration sum mismatch for {npy_name}: "
+                f"sum(duration)={dur_sum}, mel_frames={mel_frames}"
+            )
     return dur_tensor
 
 
@@ -104,7 +112,9 @@ def process_sample(
     # -- duration (optional) --
     duration = None
     if durations_dir is not None:
-        duration = load_duration(Path(durations_dir), spk_name, wav_p.stem, len(text_norm))
+        duration = load_duration(
+            Path(durations_dir), spk_name, wav_p.stem, len(text_norm), mel_frames=mel.shape[-1]
+        )
         if duration is None:
             return out_path, True  # skipped
 
@@ -252,7 +262,7 @@ def main():
                 duration = None
                 if args.durations_dir:
                     dur_dir = Path(args.durations_dir)
-                    duration = load_duration(dur_dir, spk_name, wav_p.stem, len(text_norm))
+                    duration = load_duration(dur_dir, spk_name, wav_p.stem, len(text_norm), mel_frames=mel.shape[-1])
                     if duration is None:
                         skipped_count += 1
                         tqdm.write(f"SKIP: Duration not found for {wav_path}")
@@ -304,18 +314,17 @@ def main():
 
     elapsed = time.time() - start_time
     total_processed = len(entries) - len(errors)
+    saved_count = total_processed - skipped_count
     speed = total_processed / elapsed if elapsed > 0 else 0
 
     if errors:
         print(f"\nCompleted with {len(errors)} error(s):")
         for path, msg in errors:
             print(f"  {path}: {msg}")
-    else:
-        print(f"\nDone. Saved {len(entries)} .pt files to {output_dir}")
+    print(f"\nSaved {saved_count} .pt files to {output_dir}")
     print(f"Processing speed: {speed:.1f} samples/sec ({elapsed:.1f}s total)")
     if args.durations_dir:
-        dur_count = total_processed - skipped_count
-        print(f"Durations: {dur_count} embedded, {skipped_count} skipped (no .npy found)")
+        print(f"Durations: {saved_count} embedded, {skipped_count} skipped (no .npy found)")
 
 
 if __name__ == "__main__":
