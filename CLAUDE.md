@@ -48,6 +48,12 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
   data.batch_size=32 data.num_workers=0 +data.preload_to_memory=true \
   test=false
 
+# 日本語（JVS — 外部アライナーduration使用、MASバイパス）
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
+  experiment=jvs_aligned compile_model=false \
+  data.batch_size=32 data.num_workers=0 +data.preload_to_memory=true \
+  test=false
+
 # チェックポイントからの再開
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
   experiment=jvs_fast compile_model=false \

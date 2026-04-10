@@ -58,6 +58,65 @@ class TestJvsFastConfig:
         assert jvs_fast_config["callbacks"]["ema"]["update_starting_at_epoch"] == 10
 
 
+class TestJvsAlignedConfig:
+    """Validate jvs_aligned.yaml configuration for duration-based training."""
+
+    @pytest.fixture
+    def jvs_aligned_config(self):
+        path = CONFIGS_DIR / "experiment" / "jvs_aligned.yaml"
+        with open(path) as f:
+            return yaml.safe_load(f)
+
+    @pytest.fixture
+    def jvs_precomputed_aligned_config(self):
+        path = CONFIGS_DIR / "data" / "jvs_precomputed_aligned.yaml"
+        with open(path) as f:
+            return yaml.safe_load(f)
+
+    def test_compile_model_disabled(self, jvs_aligned_config):
+        """compile_model should be false for DDP stability."""
+        assert jvs_aligned_config["compile_model"] is False
+
+    def test_gradient_checkpointing_disabled(self, jvs_aligned_config):
+        """gradient_checkpointing should be false (static_graph compatible)."""
+        assert jvs_aligned_config["gradient_checkpointing"] is False
+
+    def test_max_epochs(self, jvs_aligned_config):
+        """max_epochs should be 2500."""
+        assert jvs_aligned_config["trainer"]["max_epochs"] == 2500
+
+    def test_precision_fp32(self, jvs_aligned_config):
+        """precision should be 32-true."""
+        assert jvs_aligned_config["trainer"]["precision"] == "32-true"
+
+    def test_tags_include_aligned(self, jvs_aligned_config):
+        """tags should include 'aligned'."""
+        assert "aligned" in jvs_aligned_config["tags"]
+
+    def test_data_load_durations_true(self, jvs_precomputed_aligned_config):
+        """load_durations should be true in data config."""
+        assert jvs_precomputed_aligned_config["load_durations"] is True
+
+    def test_data_n_spks(self, jvs_precomputed_aligned_config):
+        """n_spks should be 100 for JVS."""
+        assert jvs_precomputed_aligned_config["n_spks"] == 100
+
+    def test_model_config_has_use_precomputed_durations(self):
+        """matcha.yaml should reference ${data.load_durations}."""
+        path = CONFIGS_DIR / "model" / "matcha.yaml"
+        with open(path) as f:
+            config = yaml.safe_load(f)
+        assert config["use_precomputed_durations"] == "${data.load_durations}"
+
+    def test_early_stopping_patience(self, jvs_aligned_config):
+        """patience should be 30."""
+        assert jvs_aligned_config["callbacks"]["early_stopping"]["patience"] == 30
+
+    def test_ema_start_epoch_10(self, jvs_aligned_config):
+        """EMA should start at epoch 10."""
+        assert jvs_aligned_config["callbacks"]["ema"]["update_starting_at_epoch"] == 10
+
+
 class TestDdpOptimizedConfig:
     """Validate ddp_optimized.yaml optimization settings."""
 
