@@ -31,8 +31,9 @@ M5はM4の学習済みチェックポイントに完全に依存する。M4が�
 2. **Duration精度**: Julius ground truthとの相関係数 > 0.85
 3. **MCD**: 目標値は学習後に確定（MASベースラインとの相対改善を確認）
 4. **話者類似度**: 同一話者の合成音声間でcosine similarity > 0.85
-5. **主観評価**: ABテストでMASベースラインに対して有意な選好（p < 0.05）
-6. **評価レポート**: 全メトリクスをまとめたレポートがJSONおよび可視化付きで生成される
+5. **UTMOS評価（主軸）**: UTMOS v2でMASベースラインを有意に上回る（paired t-test, p < 0.01）、かつUTMOSスコア > 3.5（目標）
+6. **主観ABテスト（補助）**: 最低10名（推奨15名以上）の評価者による補助的評価。評価者確保が困難な場合はUTMOS評価のみで判定可
+7. **評価レポート**: 全メトリクスをまとめたレポートがJSONおよび可視化付きで生成される
 
 ### 想定期間
 
@@ -277,7 +278,8 @@ T-M5-01で生成したサンプルに対して、定量メトリクス（duratio
 - Duration精度（Julius ground truthとの相関）を定量評価
 - MCDによる合成音声品質の定量評価
 - 100話者の話者同一性保持を確認
-- ABテストでMASベースラインに対する有意な改善を確認
+- **UTMOS評価（主軸）**: 全1,000サンプルに対してUTMOS v2で自動MOS推定を実施し、MASベースラインとのpaired t-testで有意差を確認（p < 0.01）
+- **主観ABテスト（補助）**: 最低10名（推奨15名以上）の評価者による補助的な定性評価。評価者確保が困難な場合はUTMOS評価のみで判定可
 - 全メトリクスを統合した評価レポートを自動生成
 
 ### 2. 実装する内容の詳細
@@ -310,16 +312,21 @@ T-M5-01で生成したサンプルに対して、定量メトリクス（duratio
 
 `scripts/eval_degeneration_rate.py`を新規作成:
 
+**共通ライブラリの使用**: 退化率計算ロジックはM1のT-M1-04で実装する`matcha/utils/alignment_metrics.py`を共通ライブラリとして使用する。T-M5-02のスクリプトはこの共通ライブラリをimportして使用し、重複実装を避ける。
+
+共通関数:
+- `compute_degeneration_rate(durations, threshold_frames=1, threshold_ratio=0.8)` -> float (0.0-1.0): サンプル単位の退化判定と全体退化率の計算
+- `compute_duration_statistics(durations, phoneme_classes)` -> dict: 音素クラスごとのduration統計（平均、中央値、標準偏差、パーセンタイル）
+
 **退化の定義**（CLAUDE.mdと同一基準）:
 - **サンプルレベル退化**: あるサンプルにおいてphoneme（blank除く）の80%以上が1フレーム以下
 - **全体退化率**: 全評価サンプル中の退化サンプルの割合
 
 **計算手順**:
 1. T-M5-01のduration JSONから各サンプルのphonemeごとのduration配列を読み込み
-2. blank位置（偶数インデックス: 0, 2, 4, ...）を除外し、phoneme位置のdurationのみ抽出
-3. phonemeのうちduration <= 1フレームの割合を計算
-4. 80%以上が1フレーム以下ならそのサンプルを「退化」と判定
-5. 全サンプルでの退化率を算出
+2. `alignment_metrics.compute_degeneration_rate()`を呼び出し、blank位置（偶数インデックス: 0, 2, 4, ...）を除外してphoneme位置のdurationのみで退化率を計算
+3. `alignment_metrics.compute_duration_statistics()`を呼び出し、音素クラスごとの統計を生成
+4. 全サンプルでの退化率を算出
 
 **追加の退化指標**:
 
@@ -409,14 +416,39 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 - 100話者の類似度行列（100x100）を可視化（ヒートマップ）: 対角線が高く、非対角が低いことを確認
 - 外れ値話者（cosine similarity < 0.6）のリストを出力
 
-#### 2.5 ABテスト設計・実施
+#### 2.5 UTMOS自動MOS評価（主軸評価）
+
+**手法**: UTMOS v2（UTokyo-SaruLab MOS predictor）による自動MOS推定を第一評価メトリクスとして使用する。ITU-T P.800準拠の主観ABテストは統計的検出力の確保（15-20名の評価者確保）が困難なため、全サンプルに対して再現性のある自動評価を主軸とする。
+
+**評価対象**:
+- 新モデル（Julius duration + FiLM DP）: 全1,000サンプル（100話者 x 10テキスト）
+- MASベースラインモデル: 全1,000サンプル（同一条件）
+
+**評価指標**:
+
+| 指標 | 定義 | 目標値 |
+|------|------|--------|
+| UTMOS平均スコア | 全1,000サンプルのUTMOS v2スコア平均 | > 3.5（自然音声は通常4.0-4.5） |
+| MASベースラインとの差 | paired t-test（同一話者・同一テキストのペア比較） | p < 0.01で有意に上回る |
+| 話者別UTMOSスコア | 話者ごとの平均UTMOSスコア | 全話者で > 3.0 |
+
+**実装**: `scripts/eval_utmos.py`を新規作成:
+- UTMOS v2モデルのロードと推論
+- 新モデル / MASベースラインの全1,000サンプルに対するスコアリング
+- paired t-test（scipy.stats.ttest_rel）による有意差検定
+- 話者別・テキスト別のスコア分布の可視化
+- 結果をJSON形式で出力
+
+#### 2.6 主観ABテスト（補助評価）
+
+主観ABテストは補助的な評価として位置付ける。UTMOS評価が主軸であり、評価者確保が困難な場合はUTMOS評価のみで判定可とする。
 
 **テスト設計**:
 
 - **比較条件**: A = 新モデル（Julius duration + FiLM DP）、B = MASベースラインモデル
 - **評価軸**: 自然性（どちらがより自然に聞こえるか）、明瞭性（どちらが聞き取りやすいか）
-- **テストサンプル数**: 20文 x 5話者 = 100ペア（各話者はランダム選択）
-- **評価者数**: 最低5名（日本語ネイティブ）
+- **テストサンプル数**: 10文 x 5話者 = 50ペア（各話者はランダム選択。評価負荷軽減のため100ペアから削減）
+- **評価者数**: 最低10名、推奨15名以上（日本語ネイティブ）。ITU-T P.800では15-20名が推奨されており、5名では統計的検出力が不足する
 - **テスト形式**: 各ペアに対してA/B/同等の3択
 - **ランダム化**: A/Bの提示順をランダム化（左右バイアス除去）
 
@@ -434,14 +466,7 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 - 95%信頼区間の算出
 - 評価者間一致度（Fleiss' kappa）の計算
 
-**ABテストが実施できない場合の代替**:
-
-被験者確保が困難な場合、以下の代替指標で定性評価を補完:
-- UTMOS（UTokyo-SaruLab MOS predictor）: 事前学習済みMOS予測モデルによる自動MOS推定
-- PESQ/POLQA: 客観音声品質指標（参照音声が必要）
-- 人手による10サンプル聴取レポート（最低限）
-
-#### 2.6 統合評価レポート生成
+#### 2.7 統合評価レポート生成
 
 `scripts/generate_eval_report.py`を新規作成:
 
@@ -452,8 +477,9 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 3. **退化率**: 新モデル vs MASベースライン、話者別統計
 4. **MCD**: 全体・話者別、ボコーダ品質の下限との比較
 5. **話者類似度**: 類似度行列ヒートマップ、外れ値話者の分析
-6. **ABテスト結果**: 選好率、有意差検定結果
-7. **推奨パラメータ**: 最適なn_timesteps、temperature、length_scaleの推奨値
+6. **UTMOS評価結果（主軸）**: 全体・話者別のUTMOSスコア、MASベースラインとのpaired t-test結果
+7. **ABテスト結果（補助）**: 選好率、有意差検定結果（実施した場合）
+8. **推奨パラメータ**: 最適なn_timesteps、temperature、length_scaleの推奨値
 
 **出力形式**:
 - `eval/report/eval_report.json`: 全メトリクスの構造化データ
@@ -462,30 +488,34 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
   - `degeneration_comparison.png`: 新モデル vs MASの退化率比較
   - `mcd_per_speaker.png`: 話者別MCD box plot
   - `speaker_similarity_heatmap.png`: 100x100類似度行列
-  - `ab_test_results.png`: ABテスト選好率
+  - `utmos_comparison.png`: 新モデル vs MASのUTMOSスコア分布比較
+  - `utmos_per_speaker.png`: 話者別UTMOSスコア box plot
+  - `ab_test_results.png`: ABテスト選好率（実施した場合）
 
 ### 3. エージェントチームの役割と人数
 
 | 役割 | 人数 | 担当内容 |
 |------|------|----------|
-| 評価メトリクスエンジニア | 1名 | duration精度、退化率、MCDの実装 |
+| 評価メトリクスエンジニア | 1名 | duration精度、退化率、MCD、UTMOS評価の実装 |
 | 話者検証エンジニア | 1名 | 話者埋め込み抽出、類似度計算、ヒートマップ生成 |
 | ABテスト設計者 | 1名 | テスト設計、サンプル選定、統計検定、レポート生成 |
-| リスニングテスト評価者 | 5名 | ABテストへの参加（日本語ネイティブ） |
+| リスニングテスト評価者 | 最低10名、推奨15名以上 | ABテストへの参加（日本語ネイティブ）。評価者確保が困難な場合はUTMOS評価のみで判定可 |
 
-**合計: 3名（実装）+ 5名（評価者）**（評価メトリクスエンジニアとABテスト設計者は兼任可能、実装最小2名）
+**合計: 3名（実装）+ 10-15名（評価者）**（評価メトリクスエンジニアとABテスト設計者は兼任可能、実装最小2名。評価者確保が困難な場合はUTMOS評価のみで判定可）
 
 ### 4. 提供範囲とテスト項目
 
 #### 提供範囲
 
 - `scripts/eval_duration_accuracy.py`: Duration精度評価スクリプト（新規）
-- `scripts/eval_degeneration_rate.py`: 退化率計算スクリプト（新規）
+- `scripts/eval_degeneration_rate.py`: 退化率計算スクリプト（新規）。退化率計算ロジックはM1のT-M1-04で実装する`matcha/utils/alignment_metrics.py`を共通ライブラリとして使用
 - `scripts/eval_mcd.py`: MCD計算スクリプト（新規）
 - `scripts/eval_speaker_similarity.py`: 話者類似度評価スクリプト（新規）
-- `scripts/prepare_ab_test.py`: ABテストサンプル準備スクリプト（新規）
-- `scripts/analyze_ab_test.py`: ABテスト結果分析スクリプト（新規）
+- `scripts/eval_utmos.py`: UTMOS自動MOS評価スクリプト（新規・主軸評価）
+- `scripts/prepare_ab_test.py`: ABテストサンプル準備スクリプト（新規・補助評価）
+- `scripts/analyze_ab_test.py`: ABテスト結果分析スクリプト（新規・補助評価）
 - `scripts/generate_eval_report.py`: 統合レポート生成スクリプト（新規）
+- `matcha/utils/alignment_metrics.py`: 退化率計算の共通ライブラリ（M1 T-M1-04で実装、M5で再利用）
 - `eval/report/`: 評価レポート出力ディレクトリ
 
 #### テスト項目
@@ -503,10 +533,12 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 | 9 | 同一話者cos sim | `eval_speaker_similarity.py`実行 | 平均 > 0.85 |
 | 10 | 合成-参照cos sim | 同上 | 平均 > 0.75 |
 | 11 | 異話者間cos sim | 同上 | 平均 < 0.5 |
-| 12 | ABテスト選好率 | `analyze_ab_test.py`実行 | 新モデル選好率 > 60%（p < 0.05） |
-| 13 | レポート生成 | `generate_eval_report.py`実行 | JSON + 全グラフが出力される |
-| 14 | MASベースラインとの退化率比較 | 退化率レポート内の比較 | 新モデル0% vs MAS 39-43%が明記される |
-| 15 | 各スクリプトの独立実行 | 個別に実行テスト | 各スクリプトが単独で動作する（他スクリプトへの暗黙の依存なし） |
+| 12 | UTMOSスコア閾値 | `eval_utmos.py`実行 | 全体平均UTMOSスコア > 3.5 |
+| 13 | UTMOSベースライン改善 | `eval_utmos.py`実行 | MASベースラインとのpaired t-testでp < 0.01 |
+| 14 | ABテスト選好率（補助） | `analyze_ab_test.py`実行（実施した場合） | 新モデル選好率 > 60%（p < 0.05） |
+| 15 | レポート生成 | `generate_eval_report.py`実行 | JSON + 全グラフが出力される |
+| 16 | MASベースラインとの退化率比較 | 退化率レポート内の比較 | 新モデル0% vs MAS 39-43%が明記される |
+| 17 | 各スクリプトの独立実行 | 個別に実行テスト | 各スクリプトが単独で動作する（他スクリプトへの暗黙の依存なし） |
 
 ### 5. 懸念事項とレビュー項目
 
@@ -521,14 +553,15 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 
 3. **話者検証モデルの日本語性能**: VoxCelebで学習された話者検証モデルは英語話者に最適化されており、日本語話者での性能が低下する可能性がある。日本語で微調整されたモデル（例: NII JTubeSpeech pretrained）の使用を検討
 
-4. **ABテストの評価者バイアス**: 評価者が少数（5名）の場合、個人の嗜好がバイアスとなる。Fleiss' kappaで評価者間一致度を確認し、kappa < 0.4の場合はABテスト結果の信頼性に注意を記載
+4. **ABテストの評価者バイアス**: 評価者が10名未満の場合、統計的検出力が不足する（ITU-T P.800では15-20名推奨）。Fleiss' kappaで評価者間一致度を確認し、kappa < 0.4の場合はABテスト結果の信頼性に注意を記載。評価者確保が困難な場合はUTMOS評価を主軸判定とし、ABテストは補助参考データとする
 
 5. **MASベースラインチェックポイントの品質**: MASベースラインモデルが2500epまで学習されている場合、退化率43%とはいえ正常サンプル57%は比較的高品質の可能性がある。ABテストではMASベースラインの正常サンプルとの比較が最も厳しいテストとなる
 
-6. **依存ライブラリの追加**: MCDにfastdtw/scipy、話者類似度にwespeaker/speechbrainが必要。`pyproject.toml`の`[project.optional-dependencies]`に`eval`グループを追加する必要がある
+6. **依存ライブラリの追加**: MCDにfastdtw/scipy、話者類似度にwespeaker/speechbrain、UTMOSにutmos等が必要。`pyproject.toml`の`[project.optional-dependencies]`に`eval`グループを追加する必要がある
 
 #### レビュー項目
 
+- [ ] 退化率計算が`matcha/utils/alignment_metrics.py`の共通ライブラリを使用しており、T-M1-04の実装と一致しているか
 - [ ] 退化率の判定基準がCLAUDE.mdの定義（phoneme 80%以上が1フレーム以下）と完全に一致しているか
 - [ ] MCD計算でDCTの次元数（13次元、0次除く）が標準的な定義と一致しているか
 - [ ] DTWアライメントでframeの端が切り捨てられていないか（先頭・末尾の無音領域の処理）
@@ -543,7 +576,7 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 
 1. **統合評価フレームワーク**: 個別スクリプト7本ではなく、`EvaluationPipeline`クラスを設計し、メトリクスをプラグインとして追加可能にする。`pipeline.add_metric("mcd", MCDMetric())`のようなAPIで拡張性を確保
 
-2. **UTMOS/自動MOSの優先**: ABテストは被験者確保のコストが高い。UTMOS（https://github.com/sarulab-speech/UTMOS22）のような自動MOS予測モデルを第一の主観品質指標とし、ABテストは最終確認のみに限定する
+2. **UTMOS/自動MOSの継続改善**: 現在UTMOS v2を主軸評価として採用済み。今後はUTMOS v3等のより新しい自動MOS予測モデルへの更新や、日本語に特化した自動MOS予測モデルの調査を継続する
 
 3. **CI/CD統合**: 評価メトリクスの一部（退化率、duration精度）をGitHub Actions/CIに組み込み、チェックポイント更新時に自動で回帰テストを実行する仕組みにする
 
@@ -570,7 +603,11 @@ MCD [dB] = (10 * sqrt(2) / ln(10)) * mean(||MFCC_synth - MFCC_ref||_2)
 
 5. **評価レポートの保管**: `eval/report/eval_report.json`を成果物として保管し、今後のモデル更新時の比較基準（ベースライン）とする
 
-6. **Style-BERT-VITS2との比較**: MOS 4.37が参考値として記載されているが、直接比較は音声合成条件（テキスト・話者・ボコーダ）が異なるため不適切。自動MOS予測（UTMOS）で同一条件の比較が可能であれば参考情報として報告
+6. **Style-BERT-VITS2との比較**: MOS 4.37が参考値として記載されているが、直接比較は音声合成条件（テキスト・話者・ボコーダ）が異なるため不適切。UTMOS v2で同一条件の比較が可能であれば参考情報として報告
+
+**M1チケット（T-M1-04）との横断整合性に関する連絡**:
+
+7. **退化率計算の共通ライブラリ化**: T-M1-04（品質検証）とT-M5-02（退化率計算）は類似の退化率指標を計算する。重複実装を避けるため、T-M1-04で`matcha/utils/alignment_metrics.py`として退化率計算ロジックを共通ライブラリ化し、T-M5-02のスクリプト（`scripts/eval_degeneration_rate.py`）はこのライブラリをimportして使用する。M1チケット側にもこの方針を連絡済みであることを前提とする（M1チケットは別エージェントが修正中のため、M1側の記載追加はM1側で実施すること）
 
 **CLAUDE.md更新項目**:
 
