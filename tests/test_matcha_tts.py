@@ -158,7 +158,7 @@ class TestMatchaTTSSynthesise:
         x = torch.randint(0, 178, (1, 10))
         x_lengths = torch.tensor([10])
         output = model.synthesise(x, x_lengths, n_timesteps=2)
-        expected_keys = {"encoder_outputs", "decoder_outputs", "attn", "mel", "mel_lengths", "rtf"}
+        expected_keys = {"encoder_outputs", "decoder_outputs", "attn", "mel", "mel_lengths", "rtf", "durations"}
         assert set(output.keys()) == expected_keys
 
     def test_synthesise_mel_shape(self, model):

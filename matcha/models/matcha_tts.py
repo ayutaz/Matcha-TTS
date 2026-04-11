@@ -75,7 +75,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         self.update_data_statistics(data_statistics)
 
     @torch.inference_mode()
-    def synthesise(self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0):
+    def synthesise(self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0, clamp_boundary_blanks=True):
         """
         Generates mel-spectrogram from text. Returns:
             1. encoder outputs
@@ -93,6 +93,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 shape: (batch_size,)
             length_scale (float, optional): controls speech pace.
                 Increase value to slow down generated speech and vice versa.
+            clamp_boundary_blanks (bool, optional): if True, clamp first/last blank
+                durations to max 3.0 frames. Defaults to True.
 
         Returns:
             dict: {
@@ -108,6 +110,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 # Lengths of mel spectrograms
                 "rtf": float,
                 # Real-time factor
+                "durations": torch.Tensor, shape: (batch_size, max_text_length),
+                # Predicted duration per token (in frames)
             }
         """
         # For RTF computation
@@ -123,10 +127,11 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         w = torch.exp(logw) * x_mask
         # Clamp boundary blank durations (positions 0 and -1 in interspersed sequence)
         # to prevent duration predictor instability on edge tokens
-        for b in range(w.shape[0]):
-            seq_len = x_lengths[b].item()
-            w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)           # first blank
-            w[b, 0, seq_len - 1] = w[b, 0, seq_len - 1].clamp(max=3.0)  # last blank
+        if clamp_boundary_blanks:
+            for b in range(w.shape[0]):
+                seq_len = x_lengths[b].item()
+                w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)           # first blank
+                w[b, 0, seq_len - 1] = w[b, 0, seq_len - 1].clamp(max=3.0)  # last blank
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_max_length = y_lengths.max()
@@ -156,6 +161,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             "mel": denormalize(decoder_outputs, self.mel_mean, self.mel_std),
             "mel_lengths": y_lengths,
             "rtf": rtf,
+            "durations": w_ceil.squeeze(1),  # predicted duration per token (B, T_text)
         }
 
     def forward(self, x, x_lengths, y, y_lengths, spks=None, out_size=None, cond=None, durations=None):
