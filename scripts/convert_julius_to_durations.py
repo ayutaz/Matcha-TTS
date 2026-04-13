@@ -62,8 +62,13 @@ _DEVOICED_TO_VOICED = {"A": "a", "I": "i", "U": "u", "E": "e", "O": "o"}
 def parse_lab_file(lab_path: str | Path) -> list[tuple[float, float, str]]:
     """Parse an HTK-format .lab file into (start_sec, end_sec, phoneme) tuples.
 
-    HTK format: ``start_100ns end_100ns phoneme``
-    where times are in 100-nanosecond units (1e-7 seconds).
+    Supports two timestamp formats (auto-detected per line):
+      - **HTK 100ns integers**: ``0 2100000 silB`` -- divided by 1e7 to get seconds.
+      - **Float seconds**: ``0.0000000 0.0425000 silB`` -- used directly.
+
+    Julius segmentation-kit outputs float seconds; some HTK tools output
+    100ns integers. The detector checks for a decimal point in either
+    timestamp field.
 
     Lines with non-numeric timestamps or fewer than 3 fields are skipped
     with a warning rather than raising an exception.
@@ -84,8 +89,14 @@ def parse_lab_file(lab_path: str | Path) -> list[tuple[float, float, str]]:
             if len(parts) < 3:
                 continue
             try:
-                start_sec = int(parts[0]) / JULIUS_TIME_UNIT
-                end_sec = int(parts[1]) / JULIUS_TIME_UNIT
+                # Auto-detect format: decimal point means float seconds,
+                # otherwise HTK 100ns integer units.
+                if "." in parts[0] or "." in parts[1]:
+                    start_sec = float(parts[0])
+                    end_sec = float(parts[1])
+                else:
+                    start_sec = int(parts[0]) / JULIUS_TIME_UNIT
+                    end_sec = int(parts[1]) / JULIUS_TIME_UNIT
             except ValueError:
                 logger.warning(
                     "Skipping invalid line %d in %s: %s",

@@ -76,6 +76,18 @@ class TestSpecialPhonemes:
         assert map_julius_phoneme("cl") == "cl"
         assert map_julius_phoneme("pau") == "pau"
 
+    def test_map_q_to_cl(self):
+        """Julius geminate 'q' should map to pyopenjtalk 'cl'."""
+        assert map_julius_phoneme("q") == "cl"
+
+    def test_map_long_vowels(self):
+        """Julius long vowels (a:, i:, u:, e:, o:) should map to short vowels."""
+        assert map_julius_phoneme("a:") == "a"
+        assert map_julius_phoneme("i:") == "i"
+        assert map_julius_phoneme("u:") == "u"
+        assert map_julius_phoneme("e:") == "e"
+        assert map_julius_phoneme("o:") == "o"
+
 
 # ---------------------------------------------------------------------------
 # 5. Silence mapping
@@ -138,6 +150,18 @@ class TestSequenceMapping:
     def test_map_sequence_empty(self):
         """Empty sequence should return empty list."""
         assert map_julius_sequence([]) == []
+
+    def test_map_sequence_with_q(self):
+        """Sequence with q (geminate) should map q to cl."""
+        julius_seq = ["silB", "i", "q", "k", "a", "i", "silE"]
+        expected = ["sil", "i", "cl", "k", "a", "i", "sil"]
+        assert map_julius_sequence(julius_seq) == expected
+
+    def test_map_sequence_with_long_vowels(self):
+        """Sequence with long vowels should map to short vowels."""
+        julius_seq = ["silB", "o:", "k", "i:", "i", "silE"]
+        expected = ["sil", "o", "k", "i", "i", "sil"]
+        assert map_julius_sequence(julius_seq) == expected
 
     def test_map_sequence_unknown_raises_keyerror(self):
         """Sequence with unknown phoneme should raise KeyError."""
@@ -243,7 +267,8 @@ class TestJuliusPhoneCoverage:
         - 5 vowels: a, i, u, e, o
         - 16 basic consonants: k, s, t, n, h, m, y, r, w, g, z, d, b, p, f, v
         - 17 compound consonants: ky, sh, ch, ts, ty, ny, hy, ry, gy, by, py, my, dy, fy, j, kw, gw
-        - 3 special: N (moraic nasal), cl (geminate), pau (pause)
+        - 4 special: N (moraic nasal), cl (geminate), q (geminate variant), pau (pause)
+        - 5 long vowels: a:, i:, u:, e:, o:
         - 4 silence: silB, silE, sp, sil
         """
         # All expected Julius output phonemes
@@ -257,7 +282,9 @@ class TestJuliusPhoneCoverage:
             "ky", "sh", "ch", "ts", "ty", "ny", "hy", "ry",
             "gy", "by", "py", "my", "dy", "fy", "j", "kw", "gw",
             # Special
-            "N", "cl", "pau",
+            "N", "cl", "q", "pau",
+            # Long vowels
+            "a:", "i:", "u:", "e:", "o:",
             # Silence
             "silB", "silE", "sp", "sil",
         }
@@ -274,7 +301,8 @@ class TestJuliusPhoneCoverage:
             "g", "z", "d", "b", "p", "f", "v",
             "ky", "sh", "ch", "ts", "ty", "ny", "hy", "ry",
             "gy", "by", "py", "my", "dy", "fy", "j", "kw", "gw",
-            "N", "cl", "pau",
+            "N", "cl", "q", "pau",
+            "a:", "i:", "u:", "e:", "o:",
             "silB", "silE", "sp", "sil",
         }
         julius_keys = set(JULIUS_TO_PYOPENJTALK.keys())

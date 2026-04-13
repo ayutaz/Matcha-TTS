@@ -57,10 +57,17 @@ JULIUS_TO_PYOPENJTALK: dict[str, str] = {
     "j": "j",
     "kw": "kw",
     "gw": "gw",
-    # === 特殊音素 (3) ===
+    # === 特殊音素 (4) ===
     "N": "N",   # 撥音
     "cl": "cl",  # 促音
+    "q": "cl",   # 促音（Juliusは"q"を使用、pyopenjtalkは"cl"）
     "pau": "pau",  # ポーズ
+    # === 長母音（Juliusは":"付きで出力する場合がある） (5) ===
+    "a:": "a",
+    "i:": "i",
+    "u:": "u",
+    "e:": "e",
+    "o:": "o",
     # === Julius固有の無音・ポーズ (4) ===
     "silB": "sil",  # 発話先頭の無音
     "silE": "sil",  # 発話末尾の無音
