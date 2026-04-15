@@ -176,7 +176,10 @@ def load_model_ui(model_type, textbox):
 def process_text_gradio(text, language):
     cleaners = ["japanese_cleaners"] if language == "ja" else None
     output = process_text(1, text, device, cleaners=cleaners, language=language)
-    return output["x_phones"][1::2], output["x"], output["x_lengths"]
+    # Skip interspersed blank tokens: space-separated (ja) vs char-level (en)
+    x_phones = output["x_phones"]
+    phones_display = " ".join(x_phones.split()[1::2]) if language == "ja" else x_phones[1::2]
+    return phones_display, output["x"], output["x_lengths"]
 
 
 @torch.inference_mode()

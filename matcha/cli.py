@@ -57,7 +57,9 @@ def process_text(i: int, text: str, device: torch.device, cleaners=None, languag
     )[None]
     x_lengths = torch.tensor([x.shape[-1]], dtype=torch.long, device=device)
     x_phones = sequence_to_text(x.squeeze(0).tolist(), language=language)
-    print(f"[{i}] - Phonetised text: {x_phones[1::2]}")
+    # Skip interspersed blank tokens: space-separated (ja) vs char-level (en)
+    phones_display = " ".join(x_phones.split()[1::2]) if language == "ja" else x_phones[1::2]
+    print(f"[{i}] - Phonetised text: {phones_display}")
 
     return {"x_orig": text, "x": x, "x_lengths": x_lengths, "x_phones": x_phones}
 
