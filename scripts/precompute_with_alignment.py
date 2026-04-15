@@ -15,13 +15,12 @@ Two execution paths are available:
    - ProcessPoolExecutor with N workers
    - kept for debugging and binary-compat verification
 
-Usage (fast CPU, default and recommended):
+Usage (fast CPU, default and recommended — all tunables are at their defaults):
     uv run python scripts/precompute_with_alignment.py \
         --filelist data/jvs/train.txt \
         --lab-dir data/julius_work/wav \
         --output-dir data/jvs_precomputed_aligned/train \
-        --mel-mean -6.550095 --mel-std 2.383771 \
-        --io-workers 16 --batch-size 32
+        --mel-mean -6.550095 --mel-std 2.383771
 
 Usage (legacy, ProcessPool):
     uv run python scripts/precompute_with_alignment.py \
@@ -670,11 +669,23 @@ def main():
     parser.add_argument(
         "--device",
         choices=["cuda", "cpu", "auto"],
-        default="auto",
-        help="Device for mel computation in fast path",
+        default="cpu",
+        help="Device for mel computation in fast path "
+        "(default: cpu — Phase 5 benchmark showed CPU is faster than GPU due to "
+        "H2D transfer and reflect-padding overhead)",
     )
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--io-workers", type=int, default=8)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Mel batch size (default: 32)",
+    )
+    parser.add_argument(
+        "--io-workers",
+        type=int,
+        default=16,
+        help="IO worker threads for wav/lab reading and .pt saving (default: 16)",
+    )
     parser.add_argument("--text-cache-workers", type=int, default=None)
     parser.add_argument(
         "--bench-only",
