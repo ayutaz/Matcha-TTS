@@ -321,9 +321,9 @@ def cli():
 
     # Auto-detect language from model if not explicitly set
     if args.language is None:
-        if hasattr(model, "n_vocab") and model.n_vocab == 52:
+        if hasattr(model, "n_vocab") and model.n_vocab == 55:
             args.language = "ja"
-            print("[*] Auto-detected language: Japanese (n_vocab=52)")
+            print("[*] Auto-detected language: Japanese (n_vocab=55)")
         else:
             args.language = "en"
 

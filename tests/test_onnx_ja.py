@@ -54,10 +54,10 @@ class TestGetInputsVocab:
         assert x.max() < 178
 
     def test_japanese_vocab_size(self):
-        """Japanese vocab (n_vocab=52) should constrain dummy input range."""
-        inputs, names = get_inputs(False, n_vocab=52)
+        """Japanese vocab (n_vocab=55) should constrain dummy input range."""
+        inputs, names = get_inputs(False, n_vocab=55)
         x = inputs[0]
-        assert x.max() < 52
+        assert x.max() < 55
 
     def test_small_vocab_size(self):
         """Very small vocab should still work."""
@@ -67,19 +67,19 @@ class TestGetInputsVocab:
 
     def test_input_names_single_speaker(self):
         """Single speaker should have 3 inputs."""
-        inputs, names = get_inputs(False, n_vocab=52)
+        inputs, names = get_inputs(False, n_vocab=55)
         assert len(inputs) == 3
         assert names == ["x", "x_lengths", "scales"]
 
     def test_input_names_multi_speaker(self):
         """Multi speaker should have 4 inputs with spks."""
-        inputs, names = get_inputs(True, n_vocab=52)
+        inputs, names = get_inputs(True, n_vocab=55)
         assert len(inputs) == 4
         assert names == ["x", "x_lengths", "scales", "spks"]
 
     def test_scales_values(self):
         """Scales should contain temperature and length_scale."""
-        inputs, _ = get_inputs(False, n_vocab=52)
+        inputs, _ = get_inputs(False, n_vocab=55)
         scales = inputs[2]
         assert scales.shape == (2,)
         assert scales[0].item() == pytest.approx(0.667)
@@ -87,6 +87,6 @@ class TestGetInputsVocab:
 
     def test_x_lengths_matches_x(self):
         """x_lengths should match x sequence length."""
-        inputs, _ = get_inputs(False, n_vocab=52)
+        inputs, _ = get_inputs(False, n_vocab=55)
         x, x_lengths = inputs[0], inputs[1]
         assert x_lengths.item() == x.shape[1]

@@ -53,9 +53,12 @@ def _warmup_model(m, dev, n_timesteps=10):
         # to trigger compilation/caching for shapes close to real inference.
         seq_len = 50
         with torch.inference_mode():
-            dummy_x = torch.randint(0, 178, (1, seq_len), dtype=torch.long, device=dev)
+            dummy_x = torch.randint(0, m.n_vocab, (1, seq_len), dtype=torch.long, device=dev)
             dummy_x_lengths = torch.tensor([seq_len], dtype=torch.long, device=dev)
-            output = m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=n_timesteps)
+            synth_kwargs = {}
+            if m.n_spks > 1:
+                synth_kwargs["spks"] = torch.zeros(1, dtype=torch.long, device=dev)
+            output = m.synthesise(dummy_x, dummy_x_lengths, n_timesteps=n_timesteps, **synth_kwargs)
         torch.cuda.synchronize()
         print("[+] Warmup complete.")
 

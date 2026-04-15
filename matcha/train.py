@@ -136,7 +136,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             if "optimizer_states" in ckpt:
                 log.info(f"Full resume from {ckpt_path}")
-                trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt_path, weights_only=False)
+                trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
             else:
                 log.info(f"Weights-only checkpoint detected. Loading model weights from {ckpt_path}")
                 model.load_state_dict(ckpt["state_dict"])

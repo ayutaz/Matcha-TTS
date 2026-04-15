@@ -194,6 +194,10 @@ class RotaryPositionalEmbeddings(nn.Module):
 
         seq_len = x.shape[0]
 
+        if seq_len > self.max_seq_len:
+            self._build_cache(seq_len)
+            self.max_seq_len = seq_len
+
         # Split the features, we can choose to apply rotary embeddings only to a partial set of features.
         x_rope, x_pass = x[..., : self.d], x[..., self.d :]
 

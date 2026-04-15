@@ -18,7 +18,7 @@ symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa)
 SPACE_ID = symbols.index(" ")
 
 
-# === Japanese symbols (ttslearn-compatible, 52 symbols) ===
+# === Japanese symbols (ttslearn-compatible, 55 symbols) ===
 _pad_ja = "~"
 _extra_symbols_ja = ["^", "$", "?", "_", "#", "[", "]"]  # 韻律記号 (7)
 _phonemes_ja = [

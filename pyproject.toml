@@ -49,9 +49,7 @@ dependencies = [
     "numpy",
     "gdown",
     "wget",
-    "torchcodec>=0.10.0",
     "matplotlib>=3.10.8",
-    "gh>=0.0.4",
 ]
 
 [project.optional-dependencies]

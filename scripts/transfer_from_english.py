@@ -1,13 +1,13 @@
 """Create a Japanese initial checkpoint from an English Matcha-TTS checkpoint.
 
-Replaces the text encoder embedding layer (178-vocab English → 52-vocab Japanese)
+Replaces the text encoder embedding layer (178-vocab English → 55-vocab Japanese)
 while preserving all other weights for transfer learning.
 
 Usage:
     uv run python scripts/transfer_from_english.py \
         --source matcha_ljspeech.ckpt \
         --target matcha_jsut_init.ckpt \
-        --n-vocab-new 52
+        --n-vocab-new 55
 """
 
 import argparse
@@ -23,7 +23,7 @@ def main():
     )
     parser.add_argument("--source", type=str, required=True, help="Path to English checkpoint (.ckpt)")
     parser.add_argument("--target", type=str, required=True, help="Output path for Japanese initial checkpoint")
-    parser.add_argument("--n-vocab-new", type=int, default=52, help="New vocabulary size (default: 52 for Japanese)")
+    parser.add_argument("--n-vocab-new", type=int, default=55, help="New vocabulary size (default: 55 for Japanese)")
     parser.add_argument(
         "--n-channels",
         type=int,

@@ -108,7 +108,7 @@ uv run ruff check . # リンターチェック
 uv run matcha-data-stats -i ljspeech.yaml
 
 # JVSデータセットの事前計算（GPU使用）
-uv run python scripts/precompute_dataset.py --config configs/data/jvs.yaml --gpu
+uv run python scripts/precompute_dataset.py --filelist data/jvs/train.txt --output-dir data/jvs_precomputed/train --gpu
 
 # JVSデータセットの準備（無音トリミング付き）
 uv run python scripts/prepare_jvs.py --jvs-dir /path/to/jvs --output-dir data/jvs --num-workers 8
