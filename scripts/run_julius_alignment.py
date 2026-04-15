@@ -75,9 +75,9 @@ def check_prerequisites(segkit_dir):
 def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
     """Run segmentation-kit on a batch of files.
 
-    The segmentation-kit expects wav/ and txt/ subdirectories in its working
-    directory. We create a temporary directory with symlinks, run the Perl
-    script, and collect the output .lab files.
+    segment_julius.pl expects .wav and .txt files in the same directory
+    (default ``./wav``), plus ``bin/`` and ``models/`` from the segkit.
+    We create a temporary directory with symlinks to satisfy this layout.
 
     Args:
         wav_files: List of (name, wav_path) tuples.
@@ -99,20 +99,23 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
     with tempfile.TemporaryDirectory(prefix="julius_align_") as tmpdir:
         tmp = Path(tmpdir)
         wav_dir = tmp / "wav"
-        txt_dir = tmp / "txt"
         wav_dir.mkdir()
-        txt_dir.mkdir()
 
-        # Symlink files into the temp directory
+        # Symlink bin/ and models/ from segmentation-kit so that
+        # segment_julius.pl can find julius binary and acoustic models
+        (tmp / "bin").symlink_to(segkit_path / "bin")
+        (tmp / "models").symlink_to(segkit_path / "models")
+
+        # Symlink .wav and .txt into the same wav/ directory
+        # (segment_julius.pl reads "$datadir/$basename.txt" alongside .wav)
         name_set = set()
         for name, wav_path in wav_files:
             (wav_dir / f"{name}.wav").symlink_to(Path(wav_path).resolve())
             name_set.add(name)
         for name, txt_path in txt_files:
-            (txt_dir / f"{name}.txt").symlink_to(Path(txt_path).resolve())
+            (wav_dir / f"{name}.txt").symlink_to(Path(txt_path).resolve())
 
         # Run segment_julius.pl from the temp directory
-        # The script expects to find wav/ and txt/ in the current directory
         try:
             result = subprocess.run(
                 ["perl", str(segkit_path / "segment_julius.pl")],
@@ -121,10 +124,10 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
                 text=True,
                 timeout=timeout,
                 env={
-                    "PATH": f"{segkit_path}:{shutil.which('julius') and str(Path(shutil.which('julius')).parent)}:/usr/bin:/bin:/usr/local/bin",
+                    "PATH": f"{segkit_path / 'bin'}:{shutil.which('julius') and str(Path(shutil.which('julius')).parent)}:/usr/bin:/bin:/usr/local/bin",
                     "HOME": str(Path.home()),
-                    "SEGKIT_DIR": str(segkit_path),
                 },
+                check=False,
             )
         except subprocess.TimeoutExpired:
             for name in name_set:
@@ -324,7 +327,7 @@ def main():
     elapsed = time.time() - start_time
 
     # Summary
-    print(f"\nAlignment complete:")
+    print("\nAlignment complete:")
     print(f"  Success: {len(all_successes)}")
     print(f"  Errors:  {len(all_errors)}")
     print(f"  Skipped: {len(already_done)} (already done)")

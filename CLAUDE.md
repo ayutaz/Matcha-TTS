@@ -44,7 +44,7 @@ uv run python scripts/prepare_jvs.py --jvs-dir /path/to/jvs_ver1 --output-dir da
 # 2. /dev/shmキャッシュセットアップ（高速I/O）
 bash scripts/setup_shm_cache.sh --full
 
-# 3. 最適化パイプライン実行（Julius並列化 + 統合precompute）
+# 3. 最適化パイプライン実行（Julius並列化 + fast CPU precompute、~3分）
 uv run python scripts/run_optimized_pipeline.py \
   --filelist data/jvs/train.txt data/jvs/val.txt \
   --output-dir /dev/shm/julius_work \
@@ -55,6 +55,8 @@ uv run python scripts/run_optimized_pipeline.py \
 # 4. NFSにバックアップ
 cp -r /dev/shm/jvs_precomputed_aligned data/jvs_precomputed_aligned
 ```
+
+デフォルトで fast CPU path（Tier 3）を使用。precompute がさらに速くなり、Step 3+4 が 25.2分 → 1.2分 (20.6倍) に短縮されます。
 
 ### 学習
 ```bash
@@ -116,13 +118,31 @@ uv run python scripts/prepare_jvs.py --jvs-dir /path/to/jvs --output-dir data/jv
 # 英語→日本語モデル転移
 uv run python scripts/transfer_from_english.py --source model.ckpt --target ja_model.ckpt --n-vocab-new 55
 
-# JVS最適化パイプライン（Julius並列化 + 統合precompute、~30分）
+# JVS最適化パイプライン（Julius並列化 + fast CPU precompute、~3分）
 uv run python scripts/run_optimized_pipeline.py \
   --filelist data/jvs/train.txt data/jvs/val.txt \
   --output-dir /dev/shm/julius_work \
   --pt-output-dir /dev/shm/jvs_precomputed_aligned \
   --mel-mean -6.550095 --mel-std 2.383771 \
   --num-workers 16 --use-shm
+
+# precompute fast path のチューニング（必要時のみ）
+# デフォルト: --precompute-device cpu --precompute-batch-size 32 --precompute-io-workers 16
+uv run python scripts/run_optimized_pipeline.py \
+  --filelist data/jvs/train.txt data/jvs/val.txt \
+  --output-dir /dev/shm/julius_work \
+  --pt-output-dir /dev/shm/jvs_precomputed_aligned \
+  --mel-mean -6.550095 --mel-std 2.383771 \
+  --num-workers 16 --use-shm \
+  --precompute-device cpu --precompute-io-workers 32  # I/O 強化
+
+# 旧 ProcessPoolExecutor 経路（デバッグ/互換性用途）
+uv run python scripts/run_optimized_pipeline.py \
+  --filelist data/jvs/train.txt data/jvs/val.txt \
+  --output-dir /dev/shm/julius_work \
+  --pt-output-dir /dev/shm/jvs_precomputed_aligned \
+  --mel-mean -6.550095 --mel-std 2.383771 \
+  --num-workers 16 --use-shm --precompute-legacy-path
 ```
 
 ### ONNX
@@ -364,17 +384,58 @@ MASをバイパスし、外部forced alignerで正確なphoneme durationを事�
 ## パフォーマンス最適化
 
 ### 前処理最適化
-以下の最適化により、前処理パイプラインを~264分から~30分に短縮（9倍高速化）:
+`run_optimized_pipeline.py` によるフルパイプラインのend-to-end実測値（2026-04-15、JVS 12,997発話、16 workers）:
+
+#### Step 3+4 の3パターン比較 (12,348件のtrain set)
+
+| パターン | 実装 | 時間 | samples/sec | Speedup |
+|:---|:---|:---:|:---:|:---:|
+| Legacy | ProcessPoolExecutor 16 workers | **1511.9s (25.2分)** | ~8 | 1.0x (baseline) |
+| Fast CPU | single-process + ThreadPool + shared text cache | **73.5s (1.2分)** | **168.1** | **20.6倍** |
+| Fast GPU | 同上 + GPU batched mel (batch=64) | 94.2s (1.6分) | 131.1 | 16.0倍 |
+
+**GPUがCPUより遅い理由**: H2D転送とPython-levelのreflect paddingがオーバーヘッドの大半を占め、mel計算の実コスト (~2ms/sample) より大きい。推奨設定は `--device cpu`。
+
+#### フルパイプライン timing (fast CPUデフォルト)
+
+| ステップ | 実測時間 | 備考 |
+|:---|:---:|:---|
+| Step 0: Text cache (T1-3) | **5.3s** | 3,099 unique texts並列処理 |
+| Step 1: Prepare (T2-1) | **21.7s** | 16kHzリサンプル+ひらがな生成 |
+| Step 2: Julius alignment (T1-1) | **68.3s** | 12,997件 / 0エラー / 16 workers |
+| Step 3+4: Unified precompute (fast CPU) | **93.8s (1.6分)** | mel+duration+.pt生成 (train+val) |
+| **合計 (fresh run)** | **~189s (3.1分)** | |
+
+**前回との比較**: 1581.3s (26.4分) → 189s (3.1分) = **~8.5倍高速化**
+
+**binary互換性**: legacy vs fast CPU で100件中100件完全一致 (mel diff = 0.0)、fast CPU vs fast GPU は atol=1e-4 以内で一致
 
 #### Tier 1（即効性の高い最適化）
-- **Julius並列化**: ProcessPoolExecutor 16ワーカーで並列実行（220分→15分）。`run_julius_alignment.py`のインフラを再利用
-- **Duration変換並列化**: `sf.info()`でmel_frames直接計算（torch.load不要）+ ProcessPoolExecutor並列化
-- **テキスト事前計算キャッシュ**: 3,099ユニークテキストを1回だけpyopenjtalk処理してpickle保存。3ステージの重複呼び出しを排除
+- **T1-1 Julius並列化**: ProcessPoolExecutor 16ワーカーで並列実行。実測 **68秒**（sequential推定14分の13倍高速化）。`run_julius_alignment.py`のインフラを再利用
+- **T1-2 Duration変換並列化**: `sf.info()`でmel_frames直接計算（torch.load比2.2倍高速）+ ProcessPoolExecutor並列化
+- **T1-3 テキストキャッシュ**: 3,099ユニークテキストを1回だけpyopenjtalk処理（5秒）。非キャッシュ時の~5分から**60倍高速化**
 
 #### Tier 2（パイプライン統合）
-- **デュアルリサンプル**: `prepare_jvs.py --julius-output-dir`で22kHzと16kHzを同時出力（1回の音声読み込み）
-- **統合precompute**: `precompute_with_alignment.py`が.lab→duration変換とmel計算を1パスで実行（中間.npy廃止）
-- **/dev/shmキャッシュ**: `setup_shm_cache.sh --full`で中間ファイルをtmpfsに配置（NFS I/O排除）
+- **T2-1 デュアルリサンプル**: `prepare_jvs.py --julius-output-dir`で22kHzと16kHzを同時出力（1回の音声読み込み）
+- **T2-2 統合precompute**: `precompute_with_alignment.py`が.lab→duration変換とmel計算を1パスで実行（中間.npy廃止、7%高速化）
+- **T2-3 /dev/shmキャッシュ**: `setup_shm_cache.sh --full`で中間ファイルをtmpfsに配置（NFS→SHM 1.4倍高速化、学習時I/O加速）
+
+#### Tier 3（precompute fast path、2026-04-15、Phase 1-5）
+ProcessPoolExecutor版からsingle-process版への書き直しで **25.2分 → 1.2分 (20.6倍高速化)** を達成。
+
+- **T3-1 共有テキストキャッシュ**: `build_text_sequence_cache()` が 3,099 unique textsの `text_to_sequence(..., language="ja")` 結果 `(seq, cleaned_text)` を事前計算。ProcessPool で並列化、結果をmain processのdictに集約。multiprocessingで各ワーカーが独立にpyopenjtalkを叩く無駄を排除
+- **T3-2 single-process + ThreadPool producer/consumer**: I/O (`sf.read` + `.lab` parse) は `ThreadPoolExecutor(io_workers)` で先読み並列化、`torch.save` も別poolで並列化。GILが sf.read/torch.save 内でリリースされるためThreadで十分。`ProcessPoolExecutor` の spawn/IPC/pyopenjtalk再ロードのオーバーヘッド (~18分分) を完全に排除
+- **T3-3 GPU batched mel (ただし非推奨)**: `_mel_batch_gpu()` が可変長audioをzero-pad → `torch.stft(center=False)` batched → per-sample slice (`T_i = 1 + (L_i - 256)//256`) で個別に normalize → CPU転送。実装はあるがbenchmarkでCPU版より遅いため、`--device cpu` をデフォルトに
+
+**新CLI引数** (`scripts/precompute_with_alignment.py`): `--legacy` (旧経路強制), `--device cpu|cuda|auto`, `--batch-size N`, `--io-workers N`, `--text-cache-workers N`, `--bench-only N`
+
+**`run_optimized_pipeline.py` からの透過**: `--precompute-legacy-path`, `--precompute-device` (default: cpu), `--precompute-batch-size` (default: 32), `--precompute-io-workers` (default: 16)
+
+#### run_segkit_batch のバグ修正（2026-04-15）
+`scripts/run_julius_alignment.py` に以下のバグがあり、修正済み:
+- **旧**: `.txt`ファイルを`tmp/txt/`にsymlinkしていたが、`segment_julius.pl`は`.wav`と同じディレクトリから`.txt`を読む仕様 → 全Julius処理が失敗し、以前の12,575件は手動Perl実行で生成されていた
+- **新**: `.wav`と`.txt`の両方を`tmp/wav/`にsymlink + `bin/`と`models/`を segkit から temp dirへsymlink（Julius実行ファイル解決）
+- **効果**: バグ修正後は12,997件全てが0エラーで完了（修正前は422件欠落）
 
 ### 学習最適化
 - **Fused AdamW**: `fused=True`でオプティマイザステップ高速化（ただしFP16+gradient clippingとは非互換）

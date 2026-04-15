@@ -6,15 +6,26 @@ An optimized version of run_full_alignment_pipeline.py that integrates:
 - T1-3: Text-to-hiragana cache (pre-compute once, reuse across steps)
 - T2-2: Unified precompute_with_alignment.py (merges Step 3+4 into one)
 - T2-3: --use-shm option for /dev/shm output
+- T3-1~T3-3: Fast CPU precompute path (single-process + ThreadPool +
+  shared text_to_sequence cache). Activated by default since 2026-04-15
+  (~20x faster than legacy ProcessPool version).
 - Pipeline-level timing instrumentation
 
-Usage:
+End-to-end benchmark (2026-04-15, JVS 12,997 utterances, 16 workers):
+    Step 0 (text cache):     5.3s
+    Step 1 (prepare):       21.7s
+    Step 2 (Julius):        68.3s
+    Step 3+4 (fast CPU):    93.8s
+    Total:                 189.1s (~3.1 min)
+    Previous (legacy):    1581.3s (~26.4 min) — 8.5x speedup
+
+Usage (recommended):
     uv run python scripts/run_optimized_pipeline.py \
         --filelist data/jvs/train.txt data/jvs/val.txt \
         --output-dir data/julius_work \
         --pt-output-dir data/jvs_precomputed_aligned \
         --mel-mean -6.550095 --mel-std 2.383771 \
-        --num-workers 8
+        --num-workers 16
 
     # With /dev/shm acceleration:
     uv run python scripts/run_optimized_pipeline.py \
@@ -22,15 +33,30 @@ Usage:
         --output-dir data/julius_work \
         --pt-output-dir data/jvs_precomputed_aligned \
         --mel-mean -6.550095 --mel-std 2.383771 \
-        --num-workers 8 --use-shm
+        --num-workers 16 --use-shm
 
-    # Legacy mode (separate Step 3 + Step 4):
+    # Force precompute_with_alignment.py to use its internal legacy path
+    # (ProcessPoolExecutor, binary-identical output, ~20x slower):
     uv run python scripts/run_optimized_pipeline.py \
         --filelist data/jvs/train.txt data/jvs/val.txt \
         --output-dir data/julius_work \
         --pt-output-dir data/jvs_precomputed_aligned \
         --mel-mean -6.550095 --mel-std 2.383771 \
-        --num-workers 8 --legacy-precompute
+        --num-workers 16 --precompute-legacy-path
+
+    # Fall back to the old separate Step 3 + Step 4 pipeline
+    # (convert_julius_to_durations.py + precompute_dataset.py):
+    uv run python scripts/run_optimized_pipeline.py \
+        --filelist data/jvs/train.txt data/jvs/val.txt \
+        --output-dir data/julius_work \
+        --pt-output-dir data/jvs_precomputed_aligned \
+        --mel-mean -6.550095 --mel-std 2.383771 \
+        --num-workers 16 --legacy-precompute
+
+Fast precompute tunables:
+    --precompute-device cpu|cuda|auto  (default: cpu — GPU is slower in benchmark)
+    --precompute-batch-size N          (default: 32)
+    --precompute-io-workers N          (default: 16)
 """
 
 import argparse
@@ -339,6 +365,17 @@ def main():
     parser.add_argument("--legacy-precompute", action="store_true",
                         help="Use legacy separate pipeline: Step 3 (convert_julius_to_durations) "
                              "+ Step 4 (precompute_dataset.py --durations-dir)")
+    parser.add_argument("--precompute-legacy-path", action="store_true",
+                        help="Force precompute_with_alignment.py to use its internal legacy "
+                             "ProcessPoolExecutor path (Phase 1-). Default uses the fast path.")
+    parser.add_argument("--precompute-device", type=str, default="cpu",
+                        choices=["cpu", "cuda", "auto"],
+                        help="Device for mel computation in unified fast path "
+                             "(default: cpu — Phase 5 benchmark showed CPU is faster than GPU)")
+    parser.add_argument("--precompute-batch-size", type=int, default=32,
+                        help="Batch size for unified fast precompute (default: 32)")
+    parser.add_argument("--precompute-io-workers", type=int, default=16,
+                        help="IO workers for unified fast precompute (default: 16)")
 
     # T2-3: /dev/shm option
     parser.add_argument("--use-shm", action="store_true",
@@ -443,6 +480,14 @@ def main():
                     "--mel-std", str(args.mel_std),
                     "--num-workers", str(args.num_workers),
                 ]
+                if args.precompute_legacy_path:
+                    cmd.append("--legacy")
+                else:
+                    cmd.extend([
+                        "--device", args.precompute_device,
+                        "--batch-size", str(args.precompute_batch_size),
+                        "--io-workers", str(args.precompute_io_workers),
+                    ])
                 log.info("Running: %s", " ".join(cmd))
                 subprocess.run(cmd, check=True)
             timings["Step 3+4: Unified precompute"] = time.time() - t0
