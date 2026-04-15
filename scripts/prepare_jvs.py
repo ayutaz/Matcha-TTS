@@ -3,12 +3,17 @@
 Usage:
     uv run python scripts/prepare_jvs.py --jvs-dir /data/jvs_raw/jvs_ver1 --output-dir data/jvs
 
+    # With Julius 16kHz output for forced alignment:
+    uv run python scripts/prepare_jvs.py --jvs-dir /data/jvs_raw/jvs_ver1 --output-dir data/jvs \
+        --julius-output-dir data/julius_work
+
 Steps:
     1. Collect parallel100 + nonpara30 subsets from all speakers
     2. Resample audio from 24 kHz to 22050 Hz
     3. Trim leading/trailing silence (JVS has ~500ms silence per utterance)
     4. Generate multi-speaker file lists (audio_path|speaker_id|text)
     5. Split into train/val sets (95/5)
+    6. (Optional) Output 16kHz WAV + hiragana text for Julius alignment
 """
 
 import argparse
@@ -72,8 +77,19 @@ def trim_silence(waveform, sample_rate, top_db=30, margin_ms=50):
     return waveform[:, start_sample:end_sample]
 
 
-def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050, do_trim=True):
-    """Resample and optionally trim silence from a single audio file."""
+def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050, do_trim=True,
+                   julius_output_path=None, julius_sr=16000):
+    """Resample and optionally trim silence. Optionally output Julius 16kHz version too.
+
+    Args:
+        input_path: Source audio file path.
+        output_path: Destination path for resampled (target_sr) audio.
+        orig_sr: Expected original sample rate (overridden if file header differs).
+        target_sr: Target sample rate for main output (default 22050).
+        do_trim: Whether to trim leading/trailing silence.
+        julius_output_path: If set, also write a 16kHz 16-bit PCM WAV here.
+        julius_sr: Sample rate for Julius output (default 16000).
+    """
     data, sr = sf.read(input_path, dtype="float32")
     if data.ndim == 1:
         data = data[None, :]  # (1, samples)
@@ -89,12 +105,27 @@ def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050, do_t
         waveform = trim_silence(waveform, target_sr)
     sf.write(str(output_path), waveform.squeeze(0).numpy(), target_sr)
 
+    # Julius 16kHz output (from already-trimmed 22kHz)
+    if julius_output_path is not None:
+        resampler_julius = torchaudio.transforms.Resample(target_sr, julius_sr)
+        waveform_julius = resampler_julius(waveform)
+        sf.write(str(julius_output_path), waveform_julius.squeeze(0).numpy(), julius_sr, subtype="PCM_16")
+
 
 def _resample_worker(args_tuple):
-    """Worker function for parallel resampling. Accepts a tuple for pickling compatibility."""
-    src_wav, dst_wav, target_sr, do_trim = args_tuple
+    """Worker function for parallel resampling. Now supports dual output.
+
+    Accepts a 4-tuple (src, dst, sr, trim) for standard mode,
+    or a 6-tuple (src, dst, sr, trim, julius_wav, julius_sr) for dual output.
+    """
+    if len(args_tuple) == 6:
+        src_wav, dst_wav, target_sr, do_trim, julius_wav, julius_sr = args_tuple
+    else:
+        src_wav, dst_wav, target_sr, do_trim = args_tuple
+        julius_wav, julius_sr = None, None
     try:
-        resample_audio(src_wav, dst_wav, target_sr=target_sr, do_trim=do_trim)
+        resample_audio(src_wav, dst_wav, target_sr=target_sr, do_trim=do_trim,
+                       julius_output_path=julius_wav, julius_sr=julius_sr if julius_sr else 16000)
         return str(src_wav), None
     except Exception as e:
         return str(src_wav), str(e)
@@ -137,12 +168,22 @@ def main():
         action="store_true",
         help="Disable silence trimming (default: trim enabled)",
     )
+    parser.add_argument(
+        "--julius-output-dir",
+        type=str,
+        default=None,
+        help="If set, also output 16kHz WAV + hiragana text for Julius alignment",
+    )
     args = parser.parse_args()
 
     jvs_dir = Path(args.jvs_dir)
     output_dir = Path(args.output_dir)
     wavs_dir = output_dir / "wavs"
     wavs_dir.mkdir(parents=True, exist_ok=True)
+
+    julius_dir = Path(args.julius_output_dir) if args.julius_output_dir else None
+    if julius_dir:
+        julius_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover speakers (jvs001 .. jvs100)
     speaker_dirs = sorted(d for d in jvs_dir.iterdir() if d.is_dir() and d.name.startswith("jvs"))
@@ -186,7 +227,17 @@ def main():
 
                 dst_wav = spk_wav_dir / f"{utt_id}.wav"
                 if not dst_wav.exists():
-                    resample_tasks.append((str(src_wav), str(dst_wav), args.target_sr, not args.no_trim_silence))
+                    if julius_dir:
+                        julius_wav = julius_dir / f"{spk_name}_{utt_id}.wav"
+                        resample_tasks.append((
+                            str(src_wav), str(dst_wav), args.target_sr,
+                            not args.no_trim_silence, str(julius_wav), 16000,
+                        ))
+                    else:
+                        resample_tasks.append((
+                            str(src_wav), str(dst_wav), args.target_sr,
+                            not args.no_trim_silence,
+                        ))
 
                 filelist.append(f"{dst_wav.resolve()}|{spk_id}|{text}")
 
@@ -227,6 +278,39 @@ def main():
         print(f"[!] {len(resample_errors)} resampling error(s):")
         for path, msg in resample_errors:
             print(f"  {path}: {msg}")
+
+    # Phase 3 (optional): Generate hiragana text files for Julius alignment
+    if julius_dir:
+        import re
+
+        import pyopenjtalk
+
+        _PUNCT_RE = re.compile(
+            r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　\u3000]"
+        )
+
+        def katakana_to_hiragana(text):
+            return "".join(
+                chr(ord(ch) - 0x60) if 0x30A1 <= ord(ch) <= 0x30F6 else ch
+                for ch in text
+            )
+
+        print(f"\n[*] Generating hiragana text files for Julius in {julius_dir}...")
+        generated_count = 0
+        for entry in tqdm(filelist, desc="Hiragana text", unit="files"):
+            parts = entry.split("|")
+            wav_path, _spk_id, text = parts[0], parts[1], parts[2]
+            wav_p = Path(wav_path)
+            spk_name = wav_p.parent.name
+            utt_id = wav_p.stem
+            txt_path = julius_dir / f"{spk_name}_{utt_id}.txt"
+            if not txt_path.exists():
+                kana = pyopenjtalk.g2p(text, kana=True)
+                kana = _PUNCT_RE.sub("", kana)
+                hiragana = katakana_to_hiragana(kana)
+                txt_path.write_text(hiragana, encoding="utf-8")
+                generated_count += 1
+        print(f"[+] Generated {generated_count} hiragana text files ({len(filelist) - generated_count} already existed)")
 
     print(f"\n[*] Total utterances: {len(filelist)}")
     if skipped:

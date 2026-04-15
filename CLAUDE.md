@@ -35,6 +35,27 @@ uv run python scripts/precompute_dataset.py \
 cp -r data/jvs_precomputed /dev/shm/jvs_precomputed
 ```
 
+### JVSデータ準備（最適化版パイプライン）
+```bash
+# 1. JVSデータセットの準備 + Julius用16kHz同時出力
+uv run python scripts/prepare_jvs.py --jvs-dir /path/to/jvs_ver1 --output-dir data/jvs \
+  --julius-output-dir data/julius_work/wav --num-workers 8
+
+# 2. /dev/shmキャッシュセットアップ（高速I/O）
+bash scripts/setup_shm_cache.sh --full
+
+# 3. 最適化パイプライン実行（Julius並列化 + 統合precompute）
+uv run python scripts/run_optimized_pipeline.py \
+  --filelist data/jvs/train.txt data/jvs/val.txt \
+  --output-dir /dev/shm/julius_work \
+  --pt-output-dir /dev/shm/jvs_precomputed_aligned \
+  --mel-mean -6.550095 --mel-std 2.383771 \
+  --num-workers 16 --use-shm
+
+# 4. NFSにバックアップ
+cp -r /dev/shm/jvs_precomputed_aligned data/jvs_precomputed_aligned
+```
+
 ### 学習
 ```bash
 # 英語（LJSpeech）
@@ -94,6 +115,14 @@ uv run python scripts/prepare_jvs.py --jvs-dir /path/to/jvs --output-dir data/jv
 
 # 英語→日本語モデル転移
 uv run python scripts/transfer_from_english.py --source model.ckpt --target ja_model.ckpt --n-vocab-new 55
+
+# JVS最適化パイプライン（Julius並列化 + 統合precompute、~30分）
+uv run python scripts/run_optimized_pipeline.py \
+  --filelist data/jvs/train.txt data/jvs/val.txt \
+  --output-dir /dev/shm/julius_work \
+  --pt-output-dir /dev/shm/jvs_precomputed_aligned \
+  --mel-mean -6.550095 --mel-std 2.383771 \
+  --num-workers 16 --use-shm
 ```
 
 ### ONNX
@@ -333,6 +362,19 @@ MASをバイパスし、外部forced alignerで正確なphoneme durationを事�
 - **torchaudio非互換**: PyTorch 2.10+ではtorchcodec依存でtorchaudio.loadが失敗する場合あり。`soundfile`をフォールバックとして使用
 
 ## パフォーマンス最適化
+
+### 前処理最適化
+以下の最適化により、前処理パイプラインを~264分から~30分に短縮（9倍高速化）:
+
+#### Tier 1（即効性の高い最適化）
+- **Julius並列化**: ProcessPoolExecutor 16ワーカーで並列実行（220分→15分）。`run_julius_alignment.py`のインフラを再利用
+- **Duration変換並列化**: `sf.info()`でmel_frames直接計算（torch.load不要）+ ProcessPoolExecutor並列化
+- **テキスト事前計算キャッシュ**: 3,099ユニークテキストを1回だけpyopenjtalk処理してpickle保存。3ステージの重複呼び出しを排除
+
+#### Tier 2（パイプライン統合）
+- **デュアルリサンプル**: `prepare_jvs.py --julius-output-dir`で22kHzと16kHzを同時出力（1回の音声読み込み）
+- **統合precompute**: `precompute_with_alignment.py`が.lab→duration変換とmel計算を1パスで実行（中間.npy廃止）
+- **/dev/shmキャッシュ**: `setup_shm_cache.sh --full`で中間ファイルをtmpfsに配置（NFS I/O排除）
 
 ### 学習最適化
 - **Fused AdamW**: `fused=True`でオプティマイザステップ高速化（ただしFP16+gradient clippingとは非互換）
