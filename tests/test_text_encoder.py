@@ -237,19 +237,22 @@ class TestDurationPredictorFiLM:
     def test_dp_film_instantiation_multispeaker(self):
         """n_spks=2でFiLM層が生成されること"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(128, 64, 3, 0.1, n_spks=2, spk_emb_dim=64)
-        assert hasattr(dp, 'film_1')
-        assert hasattr(dp, 'film_2')
+        assert hasattr(dp, "film_1")
+        assert hasattr(dp, "film_2")
 
     def test_dp_no_film_single_speaker(self):
         """n_spks=1でFiLM層が生成されないこと"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(128, 64, 3, 0.1, n_spks=1)
-        assert not hasattr(dp, 'film_1')
+        assert not hasattr(dp, "film_1")
 
     def test_dp_film_identity_init(self):
         """identity init: gamma=1, beta=0"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(128, 64, 3, 0.1, n_spks=2, spk_emb_dim=64)
         spks = torch.randn(2, 64)
         out = dp.film_1(spks)
@@ -260,6 +263,7 @@ class TestDurationPredictorFiLM:
     def test_dp_film_output_shape(self):
         """FiLM付きDP出力shape"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(128, 64, 3, 0.1, n_spks=2, spk_emb_dim=64)
         dp.eval()
         x = torch.randn(2, 128, 10)
@@ -272,6 +276,7 @@ class TestDurationPredictorFiLM:
     def test_dp_film_identity_preserves_output(self):
         """identity init状態でFiLMあり/なしの出力が一致"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         torch.manual_seed(42)
         dp_no_film = DurationPredictor(64, 64, 3, 0.1, n_spks=1)
         torch.manual_seed(42)
@@ -296,6 +301,7 @@ class TestDurationPredictorFiLM:
     def test_dp_film_different_speakers_different_output(self):
         """異なるspksで異なる出力（ランダム重み後）"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(64, 64, 3, 0.1, n_spks=2, spk_emb_dim=64)
         # ランダム重みでFiLMを意味のある変換にする
         nn.init.normal_(dp.film_1.weight)
@@ -313,14 +319,16 @@ class TestDurationPredictorFiLM:
     def test_dp_film_parameter_count(self):
         """FiLMのパラメータ数: 2 * (spk_emb_dim * filter_channels*2 + filter_channels*2)"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(256, 256, 3, 0.1, n_spks=2, spk_emb_dim=64)
-        film_params = sum(p.numel() for n, p in dp.named_parameters() if 'film' in n)
+        film_params = sum(p.numel() for n, p in dp.named_parameters() if "film" in n)
         # film_1: 64*512 + 512 = 33280, film_2: same = 33280, total = 66560
         assert film_params == 66560
 
     def test_dp_forward_without_spks_multispeaker(self):
         """n_spks=2でspks=None→FiLMスキップ、エラーなし"""
         from matcha.models.components.text_encoder import DurationPredictor
+
         dp = DurationPredictor(64, 64, 3, 0.1, n_spks=2, spk_emb_dim=64)
         dp.eval()
         x = torch.randn(2, 64, 10)
@@ -360,7 +368,7 @@ class TestTextEncoderFiLMIntegration:
     def test_encoder_single_speaker_unchanged(self):
         """単一話者TextEncoderの出力が変更前と同一"""
         encoder = _build_encoder(n_spks=1)
-        assert not hasattr(encoder.proj_w, 'film_1')
+        assert not hasattr(encoder.proj_w, "film_1")
         encoder.eval()
         x = torch.randint(0, 178, (2, 10))
         x_lengths = torch.tensor([10, 10])

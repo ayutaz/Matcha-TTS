@@ -201,11 +201,14 @@ def main():
 
     if args.gpu and args.tensorrt:
         providers = [
-            ('TensorrtExecutionProvider', {
-                'trt_max_workspace_size': 2147483648,
-            }),
-            'CUDAExecutionProvider',
-            'CPUExecutionProvider',
+            (
+                "TensorrtExecutionProvider",
+                {
+                    "trt_max_workspace_size": 2147483648,
+                },
+            ),
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
         ]
     elif args.gpu:
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -222,7 +225,10 @@ def main():
         with open(args.file, encoding="utf-8") as file:
             text_lines = file.read().splitlines()
 
-    processed_lines = [process_text(i, line, "cpu", cleaners=args.cleaners, language=args.language) for i, line in enumerate(text_lines)]
+    processed_lines = [
+        process_text(i, line, "cpu", cleaners=args.cleaners, language=args.language)
+        for i, line in enumerate(text_lines)
+    ]
 
     # Sort by sequence length to minimise padding waste (matches cli.py batched_synthesis)
     sorted_indices = sorted(range(len(processed_lines)), key=lambda k: processed_lines[k]["x"].shape[-1])

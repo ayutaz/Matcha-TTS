@@ -58,9 +58,9 @@ JULIUS_TO_PYOPENJTALK: dict[str, str] = {
     "kw": "kw",
     "gw": "gw",
     # === 特殊音素 (4) ===
-    "N": "N",   # 撥音
+    "N": "N",  # 撥音
     "cl": "cl",  # 促音
-    "q": "cl",   # 促音（Juliusは"q"を使用、pyopenjtalkは"cl"）
+    "q": "cl",  # 促音（Juliusは"q"を使用、pyopenjtalkは"cl"）
     "pau": "pau",  # ポーズ
     # === 長母音（Juliusは":"付きで出力する場合がある） (5) ===
     "a:": "a",
@@ -71,8 +71,8 @@ JULIUS_TO_PYOPENJTALK: dict[str, str] = {
     # === Julius固有の無音・ポーズ (4) ===
     "silB": "sil",  # 発話先頭の無音
     "silE": "sil",  # 発話末尾の無音
-    "sp": "pau",    # 短いポーズ
-    "sil": "sil",   # 一般的な無音
+    "sp": "pau",  # 短いポーズ
+    "sil": "sil",  # 一般的な無音
 }
 
 # 韻律記号（pyopenjtalkにあるがJuliusにはない）
@@ -81,8 +81,7 @@ PROSODY_SYMBOLS = {"^", "$", "?", "_", "#", "[", "]"}
 # マッピングテーブルの整合性検証: 全バリューが symbols_ja に含まれること
 for _julius_ph, _pyopenjtalk_ph in JULIUS_TO_PYOPENJTALK.items():
     assert _pyopenjtalk_ph in _VALID_PYOPENJTALK_SYMBOLS, (
-        f"Mapping value '{_pyopenjtalk_ph}' (from Julius '{_julius_ph}') "
-        f"is not in symbols_ja"
+        f"Mapping value '{_pyopenjtalk_ph}' (from Julius '{_julius_ph}') is not in symbols_ja"
     )
 
 
@@ -102,8 +101,7 @@ def map_julius_phoneme(julius_phoneme: str) -> str:
         return JULIUS_TO_PYOPENJTALK[julius_phoneme]
     except KeyError:
         raise KeyError(
-            f"Unknown Julius phoneme: '{julius_phoneme}'. "
-            f"Known phonemes: {sorted(JULIUS_TO_PYOPENJTALK.keys())}"
+            f"Unknown Julius phoneme: '{julius_phoneme}'. Known phonemes: {sorted(JULIUS_TO_PYOPENJTALK.keys())}"
         ) from None
 
 

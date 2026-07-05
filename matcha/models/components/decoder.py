@@ -18,9 +18,7 @@ class SinusoidalPosEmb(torch.nn.Module):
         assert self.dim % 2 == 0, "SinusoidalPosEmb requires dim to be even"
         self.half_dim = dim // 2
         self.emb_coeff = math.log(10000) / (self.half_dim - 1)
-        self.register_buffer(
-            "emb_weights", torch.exp(torch.arange(self.half_dim).float() * -self.emb_coeff)
-        )
+        self.register_buffer("emb_weights", torch.exp(torch.arange(self.half_dim).float() * -self.emb_coeff))
 
     def forward(self, x, scale=1000):
         if x.ndim < 1:

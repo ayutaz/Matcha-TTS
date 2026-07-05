@@ -7,6 +7,7 @@ Usage:
         --output-dir eval/ab_test \
         --n-pairs 50
 """
+
 import argparse
 import json
 import random
@@ -53,9 +54,7 @@ def select_pairs(model_a_dir, model_b_dir, n_pairs=50, seed=42):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Prepare A/B test sample pairs for subjective evaluation"
-    )
+    parser = argparse.ArgumentParser(description="Prepare A/B test sample pairs for subjective evaluation")
     parser.add_argument("--model-a-dir", type=str, required=True)
     parser.add_argument("--model-b-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, required=True)

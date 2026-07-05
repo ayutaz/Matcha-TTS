@@ -287,7 +287,9 @@ class MultiHeadAttention(nn.Module):
             attn_mask = mask.bool() if mask is not None else None
             dropout_p = self.p_dropout if self.training else 0.0
             output = F.scaled_dot_product_attention(
-                query, key, value,
+                query,
+                key,
+                value,
                 attn_mask=attn_mask,
                 dropout_p=dropout_p,
             )

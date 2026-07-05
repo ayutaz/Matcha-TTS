@@ -466,7 +466,16 @@ def main():
         model_type.change(lambda _: gr.Button(interactive=False), inputs=[synth_btn], outputs=[synth_btn]).then(
             load_model_ui,
             inputs=[model_type, text],
-            outputs=[text, synth_btn, spk_slider, example_row_lj_speech, example_row_multispeaker, example_row_japanese, length_scale, current_language],
+            outputs=[
+                text,
+                synth_btn,
+                spk_slider,
+                example_row_lj_speech,
+                example_row_multispeaker,
+                example_row_japanese,
+                length_scale,
+                current_language,
+            ],
         )
 
         synth_btn.click(

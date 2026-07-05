@@ -5,6 +5,7 @@ Usage:
         --wav-dir eval/samples/julius_model \
         --output eval/report/utmos.json
 """
+
 import argparse
 import json
 import sys

@@ -211,7 +211,7 @@ class TestVerifyAlignmentQuality:
         fl_path, dur_dir = _create_test_data(
             tmp_path,
             [
-                ("こんにちは", True),   # healthy
+                ("こんにちは", True),  # healthy
                 ("ありがとう", False),  # degenerate (all dur=1)
             ],
         )
@@ -246,11 +246,16 @@ class TestVerifyAlignmentQuality:
         )
         report_path = tmp_path / "report.json"
 
-        exit_code = main([
-            "--duration-dir", str(dur_dir),
-            "--filelist", fl_path,
-            "--output-report", str(report_path),
-        ])
+        exit_code = main(
+            [
+                "--duration-dir",
+                str(dur_dir),
+                "--filelist",
+                fl_path,
+                "--output-report",
+                str(report_path),
+            ]
+        )
 
         assert exit_code == 0
         assert report_path.exists()
@@ -264,10 +269,14 @@ class TestVerifyAlignmentQuality:
         fl_path = tmp_path / "fl.txt"
         fl_path.write_text("/a/b.wav|0|test\n")
 
-        exit_code = main([
-            "--duration-dir", str(tmp_path / "nonexistent"),
-            "--filelist", str(fl_path),
-        ])
+        exit_code = main(
+            [
+                "--duration-dir",
+                str(tmp_path / "nonexistent"),
+                "--filelist",
+                str(fl_path),
+            ]
+        )
         assert exit_code == 1
 
     def test_length_mismatch_detected(self, tmp_path):

@@ -53,9 +53,7 @@ def parse_lab_file(lab_path: Path) -> list[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Validate Julius phoneme mapping coverage against .lab files."
-    )
+    parser = argparse.ArgumentParser(description="Validate Julius phoneme mapping coverage against .lab files.")
     parser.add_argument(
         "--lab-dir",
         type=Path,

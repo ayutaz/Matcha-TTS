@@ -75,7 +75,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         self.update_data_statistics(data_statistics)
 
     @torch.inference_mode()
-    def synthesise(self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0, clamp_boundary_blanks=True):
+    def synthesise(
+        self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0, clamp_boundary_blanks=True
+    ):
         """
         Generates mel-spectrogram from text. Returns:
             1. encoder outputs
@@ -130,7 +132,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         if clamp_boundary_blanks:
             for b in range(w.shape[0]):
                 seq_len = x_lengths[b].item()
-                w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)           # first blank
+                w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)  # first blank
                 w[b, 0, seq_len - 1] = w[b, 0, seq_len - 1].clamp(max=3.0)  # last blank
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
@@ -206,9 +208,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             durations_f = durations.float()
             if durations_f.dim() == 3:
                 durations_f = durations_f.squeeze(1)
-            assert durations_f.dim() == 2, (
-                f"Expected 2D durations (B, T_text), got shape {durations_f.shape}"
-            )
+            assert durations_f.dim() == 2, f"Expected 2D durations (B, T_text), got shape {durations_f.shape}"
             attn = generate_path(durations_f, attn_mask.squeeze(1))
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram

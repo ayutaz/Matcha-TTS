@@ -164,7 +164,7 @@ class TestComputeDurationStats:
 class TestComputeCorpusStats:
     def test_multiple_utterances(self):
         """Aggregation over multiple utterances is correct."""
-        dur1 = np.array([0, 5, 0, 10, 0], dtype=np.int64)   # healthy
+        dur1 = np.array([0, 5, 0, 10, 0], dtype=np.int64)  # healthy
         dur2 = np.array([0, 8, 0, 12, 0, 6, 0], dtype=np.int64)  # healthy
         stats = compute_corpus_stats([dur1, dur2])
 
@@ -260,12 +260,8 @@ class TestComputeCorpusStatsStreaming:
         assert s_ph["pct_le2"] == pytest.approx(b_ph["pct_le2"])
 
         # Blank stats
-        assert streaming["blank_stats"]["mean_blank0"] == pytest.approx(
-            batch["blank_stats"]["mean_blank0"]
-        )
-        assert streaming["blank_stats"]["all_zero_rate"] == pytest.approx(
-            batch["blank_stats"]["all_zero_rate"]
-        )
+        assert streaming["blank_stats"]["mean_blank0"] == pytest.approx(batch["blank_stats"]["mean_blank0"])
+        assert streaming["blank_stats"]["all_zero_rate"] == pytest.approx(batch["blank_stats"]["all_zero_rate"])
 
     def test_degenerate_detection(self, tmp_path):
         """Streaming correctly identifies degenerate utterances."""
@@ -297,9 +293,7 @@ class TestComputeCorpusStatsStreaming:
         stats = compute_corpus_stats_streaming([p])
         assert stats["total_samples"] == 1
         assert stats["degenerate_count"] == 0
-        assert stats["phoneme_duration_stats"]["mean"] == pytest.approx(
-            np.mean([7, 3, 12]), abs=1e-6
-        )
+        assert stats["phoneme_duration_stats"]["mean"] == pytest.approx(np.mean([7, 3, 12]), abs=1e-6)
 
     def test_no_median_key(self, tmp_path):
         """Streaming stats omit median (cannot be computed in streaming)."""

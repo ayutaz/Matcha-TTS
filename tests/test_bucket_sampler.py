@@ -107,9 +107,7 @@ class TestBucketBatchSampler:
         var_20 = _compute_batch_variance(batches_20, file_sizes)
 
         # 20 buckets should have less or equal within-batch variance than 10 buckets
-        assert var_20 <= var_10, (
-            f"Expected 20-bucket variance ({var_20:.1f}) <= 10-bucket variance ({var_10:.1f})"
-        )
+        assert var_20 <= var_10, f"Expected 20-bucket variance ({var_20:.1f}) <= 10-bucket variance ({var_10:.1f})"
 
     def test_len_is_reasonable_estimate_drop_last_false(self):
         """__len__ should be a reasonable estimate of the batch count (drop_last=False).
@@ -156,9 +154,7 @@ class TestDistributedBucketBatchSampler:
     def test_default_num_buckets_is_20(self):
         """Default num_buckets should be 20."""
         file_sizes = _make_file_sizes()
-        sampler = DistributedBucketBatchSampler(
-            file_sizes, batch_size=BATCH_SIZE, num_replicas=2, rank=0
-        )
+        sampler = DistributedBucketBatchSampler(file_sizes, batch_size=BATCH_SIZE, num_replicas=2, rank=0)
         assert sampler.num_buckets == 20
 
     def test_custom_num_buckets(self):
@@ -225,9 +221,7 @@ class TestDistributedBucketBatchSampler:
         # Some overlap is possible due to padding (wrapping extra indices to make
         # evenly divisible), but the overlap should be minimal
         max_padding = num_replicas - 1
-        assert len(overlap) <= max_padding, (
-            f"Ranks share {len(overlap)} indices, expected at most {max_padding}"
-        )
+        assert len(overlap) <= max_padding, f"Ranks share {len(overlap)} indices, expected at most {max_padding}"
 
     def test_set_epoch_changes_order(self):
         """Calling set_epoch should change the iteration order."""
@@ -277,9 +271,7 @@ class TestDistributedBucketBatchSampler:
         batches_20 = list(sampler_20)
         var_20 = _compute_batch_variance(batches_20, file_sizes)
 
-        assert var_20 <= var_10, (
-            f"Expected 20-bucket variance ({var_20:.1f}) <= 10-bucket variance ({var_10:.1f})"
-        )
+        assert var_20 <= var_10, f"Expected 20-bucket variance ({var_20:.1f}) <= 10-bucket variance ({var_10:.1f})"
 
     def test_len_is_reasonable_estimate_drop_last_true(self):
         """__len__ should be a reasonable estimate of the batch count (drop_last=True).

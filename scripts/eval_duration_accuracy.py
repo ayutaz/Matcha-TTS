@@ -6,6 +6,7 @@ Usage:
         --gt-dir /dev/shm/jvs_precomputed_aligned/val \
         --output eval/report/duration_accuracy.json
 """
+
 import argparse
 import json
 import sys
@@ -56,9 +57,7 @@ def compute_accuracy(pred_durations, gt_durations):
     # Relative error
     nonzero_mask = gt_ph > 0
     if nonzero_mask.any():
-        rel_err = float(
-            (np.abs(pred_ph[nonzero_mask] - gt_ph[nonzero_mask]) / gt_ph[nonzero_mask]).mean()
-        )
+        rel_err = float((np.abs(pred_ph[nonzero_mask] - gt_ph[nonzero_mask]) / gt_ph[nonzero_mask]).mean())
     else:
         rel_err = float("nan")
 

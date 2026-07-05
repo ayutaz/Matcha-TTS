@@ -62,7 +62,9 @@ def maximum_path_pytorch_original(value: torch.Tensor, mask: torch.Tensor) -> to
 
     for y in range(t_y - 1, -1, -1):
         y_valid = torch.tensor(y, device=device) < t_y_max  # [b]
-        path[batch_idx, index, y] = torch.where(y_valid, torch.ones(1, device=device, dtype=dtype), path[batch_idx, index, y])
+        path[batch_idx, index, y] = torch.where(
+            y_valid, torch.ones(1, device=device, dtype=dtype), path[batch_idx, index, y]
+        )
 
         if y > 0:
             can_step = (index > 0) & y_valid
@@ -177,9 +179,7 @@ def maximum_path_pytorch(value: torch.Tensor, mask: torch.Tensor) -> torch.Tenso
     for y in range(t_y - 1, -1, -1):
         # Only set path if y < t_y_max for this sample
         y_valid = y < t_y_max  # [b]
-        path[batch_idx, index, y] = torch.where(
-            y_valid, one_val, path[batch_idx, index, y]
-        )
+        path[batch_idx, index, y] = torch.where(y_valid, one_val, path[batch_idx, index, y])
 
         if y > 0:
             # Decide whether to step index back

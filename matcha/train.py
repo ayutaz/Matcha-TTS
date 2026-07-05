@@ -40,8 +40,7 @@ def setup_cuda_optimizations():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     log.info(
-        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s, "
-        "TF32 matmul=%s, TF32 cudnn=%s",
+        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s, TF32 matmul=%s, TF32 cudnn=%s",
         torch.backends.cudnn.benchmark,
         torch.backends.cudnn.deterministic,
         torch.backends.cuda.matmul.allow_tf32,
@@ -100,9 +99,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             if estimator is not None and getattr(estimator, "use_gradient_checkpointing", False):
                 log.info("Gradient checkpointing enabled and verified on decoder estimator.")
             else:
-                log.warning(
-                    "Gradient checkpointing was requested but could not be verified on decoder estimator."
-                )
+                log.warning("Gradient checkpointing was requested but could not be verified on decoder estimator.")
         else:
             log.warning("Model does not support enable_gradient_checkpointing(); skipping.")
 

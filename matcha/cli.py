@@ -372,14 +372,16 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
     with ThreadPoolExecutor(max_workers=min(8, len(texts))) as executor:
-        processed_text = list(executor.map(
-            process_text,
-            range(len(texts)),
-            texts,
-            ["cpu"] * len(texts),
-            [args.cleaners] * len(texts),
-            [args.language] * len(texts),
-        ))
+        processed_text = list(
+            executor.map(
+                process_text,
+                range(len(texts)),
+                texts,
+                ["cpu"] * len(texts),
+                [args.cleaners] * len(texts),
+                [args.language] * len(texts),
+            )
+        )
 
     # Sort by sequence length to reduce padding waste, track original indices
     sorted_indices = sorted(range(len(processed_text)), key=lambda k: processed_text[k]["x"].shape[-1])
@@ -419,7 +421,11 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
             new_dict = {"mel": output["mel"][j][:, :length], "waveform": output["waveform"][j][: length * 256]}
             # Map back to original index for naming
             orig_idx = sorted_indices[global_idx]
-            base_name = f"utterance_{orig_idx:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{orig_idx:03d}"
+            base_name = (
+                f"utterance_{orig_idx:03d}_speaker_{args.spk:03d}"
+                if args.spk is not None
+                else f"utterance_{orig_idx:03d}"
+            )
             location = save_to_folder(base_name, new_dict, args.output_folder)
             print(f"[🍵-{orig_idx}] Waveform saved: {location}")
             global_idx += 1

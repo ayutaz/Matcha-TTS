@@ -205,23 +205,15 @@ def align_julius_with_pyopenjtalk(
         return []
 
     # Count real (non-prosody) phonemes for mode selection
-    n_real_phonemes = sum(
-        1
-        for ph in pyopenjtalk_phonemes
-        if ph not in PROSODY_SYMBOLS and ph not in {"^", "$"}
-    )
+    n_real_phonemes = sum(1 for ph in pyopenjtalk_phonemes if ph not in PROSODY_SYMBOLS and ph not in {"^", "$"})
 
     # DTW mode: always use DTW
     if align_mode == "dtw":
-        return align_julius_with_pyopenjtalk_dtw(
-            julius_phonemes, pyopenjtalk_phonemes, julius_durations
-        )
+        return align_julius_with_pyopenjtalk_dtw(julius_phonemes, pyopenjtalk_phonemes, julius_durations)
 
     # Auto mode: short utterances (< 30 real phonemes) use DTW directly
     if align_mode == "auto" and n_real_phonemes < 30:
-        return align_julius_with_pyopenjtalk_dtw(
-            julius_phonemes, pyopenjtalk_phonemes, julius_durations
-        )
+        return align_julius_with_pyopenjtalk_dtw(julius_phonemes, pyopenjtalk_phonemes, julius_durations)
 
     # --- Pre-process: separate prosody symbols from real phonemes ---
     # Build indices for prosody-only positions vs real phoneme positions
@@ -323,9 +315,7 @@ def align_julius_with_pyopenjtalk(
             "High mismatch rate (%.1f%%), falling back to DTW alignment",
             100 * mismatches / n_real_phonemes,
         )
-        return align_julius_with_pyopenjtalk_dtw(
-            julius_phonemes, pyopenjtalk_phonemes, julius_durations
-        )
+        return align_julius_with_pyopenjtalk_dtw(julius_phonemes, pyopenjtalk_phonemes, julius_durations)
 
     return result
 
@@ -401,8 +391,8 @@ def align_julius_with_pyopenjtalk_dtw(
             # Standard DTW transitions: match, insert (skip julius), delete (skip pyopenjtalk)
             cost[i][j] = d + min(
                 cost[i - 1][j - 1],  # match
-                cost[i - 1][j],      # skip julius (pyopenjtalk phone gets no duration)
-                cost[i][j - 1],      # skip pyopenjtalk (julius phone unmatched)
+                cost[i - 1][j],  # skip julius (pyopenjtalk phone gets no duration)
+                cost[i][j - 1],  # skip pyopenjtalk (julius phone unmatched)
             )
 
     # Backtrace
@@ -532,26 +522,22 @@ def process_single_utterance(
         # 2. Extract Julius phonemes and compute frame durations
         julius_raw = [seg[2] for seg in segments]
         julius_mapped = map_julius_sequence(julius_raw)
-        julius_frame_durations = [
-            time_to_frames(seg[0], seg[1]) for seg in segments
-        ]
+        julius_frame_durations = [time_to_frames(seg[0], seg[1]) for seg in segments]
 
         # 3. Get pyopenjtalk phoneme sequence
-        _seq, clean_text = text_to_sequence(
-            text, ["japanese_cleaners"], language="ja"
-        )
+        _seq, clean_text = text_to_sequence(text, ["japanese_cleaners"], language="ja")
         pyopenjtalk_phonemes = clean_text.split()
 
         # 4. Align Julius with pyopenjtalk
         aligned_durations = align_julius_with_pyopenjtalk(
-            julius_mapped, pyopenjtalk_phonemes, julius_frame_durations,
+            julius_mapped,
+            pyopenjtalk_phonemes,
+            julius_frame_durations,
             align_mode=align_mode,
         )
 
         # 5. Build blank-interspersed duration array
-        duration_array = build_duration_array_with_blanks(
-            aligned_durations, total_mel_frames
-        )
+        duration_array = build_duration_array_with_blanks(aligned_durations, total_mel_frames)
 
         # 6. Verify length matches interspersed text sequence
         from matcha.utils.utils import intersperse
@@ -559,10 +545,7 @@ def process_single_utterance(
         text_seq_interspersed = intersperse(_seq, 0)
         expected_len = len(text_seq_interspersed)
         if len(duration_array) != expected_len:
-            return False, (
-                f"Length mismatch: duration array {len(duration_array)} "
-                f"vs interspersed text {expected_len}"
-            )
+            return False, (f"Length mismatch: duration array {len(duration_array)} vs interspersed text {expected_len}")
 
         # 7. Save
         np.save(str(output_path), duration_array)
@@ -603,15 +586,11 @@ def make_output_name(wav_path: str) -> str:
 def _worker(args_tuple):
     """Worker function for parallel processing."""
     lab_path, text, total_mel_frames, output_path, align_mode = args_tuple
-    return process_single_utterance(
-        lab_path, text, total_mel_frames, output_path, align_mode=align_mode
-    )
+    return process_single_utterance(lab_path, text, total_mel_frames, output_path, align_mode=align_mode)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Convert Julius .lab alignment files to Matcha-TTS duration arrays."
-    )
+    parser = argparse.ArgumentParser(description="Convert Julius .lab alignment files to Matcha-TTS duration arrays.")
     parser.add_argument(
         "--lab-dir",
         type=str,

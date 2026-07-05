@@ -132,9 +132,7 @@ class TestMelFramesFromAudioInfo:
                 mel_from_formula = info.frames // HOP_LENGTH
                 pt_data = torch.load(str(pt_path), weights_only=True)
                 mel_from_pt = pt_data["mel"].shape[-1]
-                assert mel_from_formula == mel_from_pt, (
-                    f"{stem}: sf.info={mel_from_formula}, pt={mel_from_pt}"
-                )
+                assert mel_from_formula == mel_from_pt, f"{stem}: sf.info={mel_from_formula}, pt={mel_from_pt}"
                 checked += 1
 
         assert checked > 0, "No real data samples found to verify"
@@ -152,9 +150,7 @@ class TestMelFramesFromAudioInfo:
             mel_from_formula = info.frames // HOP_LENGTH
 
         audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)
-        mel = mel_spectrogram(
-            audio_tensor, 1024, 80, SAMPLE_RATE, HOP_LENGTH, 1024, 0.0, 8000, center=False
-        ).squeeze()
+        mel = mel_spectrogram(audio_tensor, 1024, 80, SAMPLE_RATE, HOP_LENGTH, 1024, 0.0, 8000, center=False).squeeze()
         mel_from_computation = mel.shape[-1]
         assert mel_from_formula == mel_from_computation
 
@@ -183,8 +179,7 @@ class TestTextCache:
             # Verify no katakana remains (U+30A1..U+30F6)
             for ch in result:
                 assert not (0x30A1 <= ord(ch) <= 0x30F6), (
-                    f"Katakana found in output: '{ch}' (U+{ord(ch):04X}) "
-                    f"for input '{text}'"
+                    f"Katakana found in output: '{ch}' (U+{ord(ch):04X}) for input '{text}'"
                 )
 
     def test_hiragana_deterministic(self):
@@ -257,9 +252,7 @@ class TestTextCache:
         # Result should not contain punctuation characters
         punct_chars = set("。、！？!?,.-「」『』（）()【】[]{}・…―─")
         for ch in result:
-            assert ch not in punct_chars, (
-                f"Punctuation '{ch}' found in output: '{result}'"
-            )
+            assert ch not in punct_chars, f"Punctuation '{ch}' found in output: '{result}'"
 
 
 # ===========================================================================
@@ -343,9 +336,7 @@ class TestDualResample:
             )
 
             info_16k = sf.info(str(output_16k))
-            assert info_16k.subtype == "PCM_16", (
-                f"Expected PCM_16, got {info_16k.subtype}"
-            )
+            assert info_16k.subtype == "PCM_16", f"Expected PCM_16, got {info_16k.subtype}"
 
     def test_no_julius_output_when_none(self):
         """When julius_output_path is None, only 22kHz is produced."""
@@ -416,8 +407,12 @@ class TestDualResample:
 
             # 6-tuple format: (src, dst, target_sr, do_trim, julius_wav, julius_sr)
             args_tuple = (
-                str(input_path), str(output_22k), 22050, False,
-                str(output_16k), 16000,
+                str(input_path),
+                str(output_22k),
+                22050,
+                False,
+                str(output_16k),
+                16000,
             )
             src_path, error = _resample_worker(args_tuple)
             assert error is None, f"Worker error: {error}"
@@ -483,8 +478,13 @@ class TestPrecomputeWithAlignment:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = Path(tmpdir) / "jvs001_BASIC5000_0025.pt"
             result_path, skipped, msg = process_sample_with_alignment(
-                str(wav_path), 0, text, str(lab_path),
-                str(out_path), mel_mean=-6.550095, mel_std=2.383771,
+                str(wav_path),
+                0,
+                text,
+                str(lab_path),
+                str(out_path),
+                mel_mean=-6.550095,
+                mel_std=2.383771,
                 align_mode="auto",
             )
             assert not skipped, f"Unexpected skip: {msg}"
@@ -520,8 +520,13 @@ class TestPrecomputeWithAlignment:
             out_path = tmpdir / "output.pt"
             lab_path = tmpdir / "nonexistent.lab"
             _, skipped, msg = process_sample_with_alignment(
-                str(wav_path), 0, "テスト", str(lab_path),
-                str(out_path), -6.55, 2.38,
+                str(wav_path),
+                0,
+                "テスト",
+                str(lab_path),
+                str(out_path),
+                -6.55,
+                2.38,
             )
             assert skipped is True
             assert "no .lab file" in msg
@@ -530,9 +535,7 @@ class TestPrecomputeWithAlignment:
         """parse_filelist correctly parses pipe-delimited entries."""
         from precompute_with_alignment import parse_filelist
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
             f.write("path/a.wav|0|テスト\n")
             f.write("path/b.wav|1|こんにちは\n")
             f.write("\n")  # empty line
@@ -565,15 +568,11 @@ class TestPrecomputeWithAlignment:
             # Validate shapes are consistent
             text_len = data["text"].shape[0]
             dur_len = data["durations"].shape[0]
-            assert text_len == dur_len, (
-                f"{pt_path.name}: text length {text_len} != duration length {dur_len}"
-            )
+            assert text_len == dur_len, f"{pt_path.name}: text length {text_len} != duration length {dur_len}"
             # Duration sum should equal mel frames
             mel_frames = data["mel"].shape[-1]
             dur_sum = data["durations"].sum().item()
-            assert dur_sum == mel_frames, (
-                f"{pt_path.name}: duration sum {dur_sum} != mel frames {mel_frames}"
-            )
+            assert dur_sum == mel_frames, f"{pt_path.name}: duration sum {dur_sum} != mel frames {mel_frames}"
 
     @pytest.mark.slow
     def test_aligned_and_nonaligned_mel_match(self):
@@ -593,25 +592,15 @@ class TestPrecomputeWithAlignment:
             data_na = torch.load(str(nonaligned_pt), weights_only=True)
 
             # Mel should be identical (same wav, same normalization)
-            assert torch.allclose(data_a["mel"], data_na["mel"], atol=1e-6), (
-                f"{aligned_pt.name}: mel mismatch"
-            )
+            assert torch.allclose(data_a["mel"], data_na["mel"], atol=1e-6), f"{aligned_pt.name}: mel mismatch"
             # Text should be identical
-            assert torch.equal(data_a["text"], data_na["text"]), (
-                f"{aligned_pt.name}: text mismatch"
-            )
+            assert torch.equal(data_a["text"], data_na["text"]), f"{aligned_pt.name}: text mismatch"
             # Speaker ID should be identical
-            assert data_a["spk"] == data_na["spk"], (
-                f"{aligned_pt.name}: spk mismatch"
-            )
+            assert data_a["spk"] == data_na["spk"], f"{aligned_pt.name}: spk mismatch"
             # Non-aligned should NOT have durations
-            assert "durations" not in data_na, (
-                f"{nonaligned_pt.name}: unexpectedly has 'durations' key"
-            )
+            assert "durations" not in data_na, f"{nonaligned_pt.name}: unexpectedly has 'durations' key"
             # Aligned MUST have durations
-            assert "durations" in data_a, (
-                f"{aligned_pt.name}: missing 'durations' key"
-            )
+            assert "durations" in data_a, f"{aligned_pt.name}: missing 'durations' key"
             checked += 1
 
         assert checked > 0, "No matching file pairs found"
@@ -620,9 +609,7 @@ class TestPrecomputeWithAlignment:
         """compute_duration_from_lab returns None for empty .lab files."""
         from precompute_with_alignment import compute_duration_from_lab
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".lab", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".lab", delete=False, encoding="utf-8") as f:
             f.write("")
             f.flush()
             result, msg = compute_duration_from_lab(f.name, "テスト", 100)

@@ -77,8 +77,9 @@ def trim_silence(waveform, sample_rate, top_db=30, margin_ms=50):
     return waveform[:, start_sample:end_sample]
 
 
-def resample_audio(input_path, output_path, orig_sr=24000, target_sr=22050, do_trim=True,
-                   julius_output_path=None, julius_sr=16000):
+def resample_audio(
+    input_path, output_path, orig_sr=24000, target_sr=22050, do_trim=True, julius_output_path=None, julius_sr=16000
+):
     """Resample and optionally trim silence. Optionally output Julius 16kHz version too.
 
     Args:
@@ -124,8 +125,14 @@ def _resample_worker(args_tuple):
         src_wav, dst_wav, target_sr, do_trim = args_tuple
         julius_wav, julius_sr = None, None
     try:
-        resample_audio(src_wav, dst_wav, target_sr=target_sr, do_trim=do_trim,
-                       julius_output_path=julius_wav, julius_sr=julius_sr if julius_sr else 16000)
+        resample_audio(
+            src_wav,
+            dst_wav,
+            target_sr=target_sr,
+            do_trim=do_trim,
+            julius_output_path=julius_wav,
+            julius_sr=julius_sr if julius_sr else 16000,
+        )
         return str(src_wav), None
     except Exception as e:
         return str(src_wav), str(e)
@@ -229,15 +236,25 @@ def main():
                 if not dst_wav.exists():
                     if julius_dir:
                         julius_wav = julius_dir / f"{spk_name}_{utt_id}.wav"
-                        resample_tasks.append((
-                            str(src_wav), str(dst_wav), args.target_sr,
-                            not args.no_trim_silence, str(julius_wav), 16000,
-                        ))
+                        resample_tasks.append(
+                            (
+                                str(src_wav),
+                                str(dst_wav),
+                                args.target_sr,
+                                not args.no_trim_silence,
+                                str(julius_wav),
+                                16000,
+                            )
+                        )
                     else:
-                        resample_tasks.append((
-                            str(src_wav), str(dst_wav), args.target_sr,
-                            not args.no_trim_silence,
-                        ))
+                        resample_tasks.append(
+                            (
+                                str(src_wav),
+                                str(dst_wav),
+                                args.target_sr,
+                                not args.no_trim_silence,
+                            )
+                        )
 
                 filelist.append(f"{dst_wav.resolve()}|{spk_id}|{text}")
 
@@ -253,9 +270,7 @@ def main():
     if resample_tasks:
         print(f"\n[*] Resampling {len(resample_tasks)} audio files with {args.num_workers} workers...")
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(_resample_worker, task): task[0] for task in resample_tasks
-            }
+            futures = {executor.submit(_resample_worker, task): task[0] for task in resample_tasks}
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
@@ -285,15 +300,10 @@ def main():
 
         import pyopenjtalk
 
-        _PUNCT_RE = re.compile(
-            r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　\u3000]"
-        )
+        _PUNCT_RE = re.compile(r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　\u3000]")
 
         def katakana_to_hiragana(text):
-            return "".join(
-                chr(ord(ch) - 0x60) if 0x30A1 <= ord(ch) <= 0x30F6 else ch
-                for ch in text
-            )
+            return "".join(chr(ord(ch) - 0x60) if 0x30A1 <= ord(ch) <= 0x30F6 else ch for ch in text)
 
         print(f"\n[*] Generating hiragana text files for Julius in {julius_dir}...")
         generated_count = 0
@@ -310,7 +320,9 @@ def main():
                 hiragana = katakana_to_hiragana(kana)
                 txt_path.write_text(hiragana, encoding="utf-8")
                 generated_count += 1
-        print(f"[+] Generated {generated_count} hiragana text files ({len(filelist) - generated_count} already existed)")
+        print(
+            f"[+] Generated {generated_count} hiragana text files ({len(filelist) - generated_count} already existed)"
+        )
 
     print(f"\n[*] Total utterances: {len(filelist)}")
     if skipped:

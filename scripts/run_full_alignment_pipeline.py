@@ -77,9 +77,7 @@ def resample_wav(input_path: str, output_path: str):
     sf.write(output_path, data, JULIUS_SR, subtype="PCM_16")
 
 
-def prepare_single(
-    wav_path: str, text: str, output_dir: Path, hiragana: str = None
-) -> tuple[str, bool, str]:
+def prepare_single(wav_path: str, text: str, output_dir: Path, hiragana: str = None) -> tuple[str, bool, str]:
     """Prepare one file: resample + hiragana text."""
     wav_p = Path(wav_path)
     spk_name = wav_p.parent.name
@@ -259,9 +257,7 @@ def main():
             # Hiragana conversion (for Julius input)
             hiragana = text_to_hiragana(text)
             # Phoneme sequence conversion (for .pt generation)
-            text_norm, cleaned_text = text_to_sequence(
-                text, ["japanese_cleaners"], language="ja"
-            )
+            text_norm, cleaned_text = text_to_sequence(text, ["japanese_cleaners"], language="ja")
             text_norm_interspersed = intersperse(text_norm, 0)
             text_cache[text] = {
                 "hiragana": hiragana,
@@ -271,9 +267,7 @@ def main():
 
         with open(text_cache_path, "wb") as f:
             pickle.dump(text_cache, f)
-        log.info(
-            "Saved text cache: %d entries to %s", len(text_cache), text_cache_path
-        )
+        log.info("Saved text cache: %d entries to %s", len(text_cache), text_cache_path)
 
     # ===== Step 1: Prepare Julius input =====
     if not args.skip_prepare:
@@ -284,17 +278,11 @@ def main():
             futures = {}
             for entry in all_entries:
                 wav_path, spk_str, text = entry
-                hiragana = (
-                    text_cache[text]["hiragana"] if text in text_cache else None
-                )
-                future = executor.submit(
-                    prepare_single, wav_path, text, wav_dir, hiragana
-                )
+                hiragana = text_cache[text]["hiragana"] if text in text_cache else None
+                future = executor.submit(prepare_single, wav_path, text, wav_dir, hiragana)
                 futures[future] = wav_path
 
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Preparing"
-            ):
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Preparing"):
                 name, is_error, msg = future.result()
                 if is_error:
                     errors.append(f"{name}: {msg}")
@@ -359,12 +347,8 @@ def main():
         success = 0
         fail = 0
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(duration_worker, task): task[0] for task in tasks
-            }
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Converting"
-            ):
+            futures = {executor.submit(duration_worker, task): task[0] for task in tasks}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Converting"):
                 try:
                     ok, msg = future.result()
                     if ok:
@@ -374,9 +358,7 @@ def main():
                 except Exception:
                     fail += 1
 
-        log.info(
-            "Converted: %d success, %d failed, %d skipped", success, fail, skip_count
-        )
+        log.info("Converted: %d success, %d failed, %d skipped", success, fail, skip_count)
 
     # ===== Step 4: Re-generate .pt with durations =====
     if not args.skip_embed:

@@ -16,6 +16,7 @@ from matcha.models.baselightningmodule import build_warmup_cosine_scheduler
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_optimizer(lr: float = 1e-4):
     """Create a minimal AdamW optimizer with a single dummy parameter."""
     param = torch.nn.Parameter(torch.zeros(1))
@@ -44,6 +45,7 @@ def _make_default_cfg(**overrides):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestWarmupCosineScheduler:
     """Core behaviour of the warmup + cosine decay scheduler."""
 
@@ -54,9 +56,7 @@ class TestWarmupCosineScheduler:
         scheduler = build_warmup_cosine_scheduler(optimizer, cfg)
 
         lr = _get_lr(optimizer)
-        assert lr == pytest.approx(1e-4 * 0.1, rel=1e-6), (
-            f"Initial lr should be 1e-5, got {lr}"
-        )
+        assert lr == pytest.approx(1e-4 * 0.1, rel=1e-6), f"Initial lr should be 1e-5, got {lr}"
 
     def test_lr_increases_during_warmup(self):
         """LR should monotonically increase throughout the warmup phase."""
@@ -68,9 +68,7 @@ class TestWarmupCosineScheduler:
         for step in range(1, 500):
             scheduler.step()
             cur_lr = _get_lr(optimizer)
-            assert cur_lr >= prev_lr, (
-                f"LR decreased at warmup step {step}: {prev_lr} -> {cur_lr}"
-            )
+            assert cur_lr >= prev_lr, f"LR decreased at warmup step {step}: {prev_lr} -> {cur_lr}"
             prev_lr = cur_lr
 
     def test_peak_lr_at_warmup_end(self):
@@ -83,9 +81,7 @@ class TestWarmupCosineScheduler:
             scheduler.step()
 
         lr = _get_lr(optimizer)
-        assert lr == pytest.approx(1e-4, rel=1e-5), (
-            f"LR at warmup end should be 1e-4, got {lr}"
-        )
+        assert lr == pytest.approx(1e-4, rel=1e-5), f"LR at warmup end should be 1e-4, got {lr}"
 
     def test_cosine_decay_after_warmup(self):
         """After warmup, lr should decrease (cosine decay)."""
@@ -104,9 +100,7 @@ class TestWarmupCosineScheduler:
             scheduler.step()
 
         lr_after_decay = _get_lr(optimizer)
-        assert lr_after_decay < peak_lr, (
-            f"LR should decrease after warmup: peak={peak_lr}, current={lr_after_decay}"
-        )
+        assert lr_after_decay < peak_lr, f"LR should decrease after warmup: peak={peak_lr}, current={lr_after_decay}"
 
     def test_lr_never_exceeds_peak(self):
         """LR should never exceed the base lr (1e-4) at any point."""
@@ -117,9 +111,7 @@ class TestWarmupCosineScheduler:
         peak = 1e-4
         for step in range(20500):
             lr = _get_lr(optimizer)
-            assert lr <= peak + 1e-9, (
-                f"LR exceeded peak at step {step}: {lr} > {peak}"
-            )
+            assert lr <= peak + 1e-9, f"LR exceeded peak at step {step}: {lr} > {peak}"
             scheduler.step()
 
     def test_lr_never_below_eta_min(self):
@@ -137,9 +129,7 @@ class TestWarmupCosineScheduler:
 
         for step in range(500, 20500):
             lr = _get_lr(optimizer)
-            assert lr >= eta_min - 1e-9, (
-                f"LR below eta_min at step {step}: {lr} < {eta_min}"
-            )
+            assert lr >= eta_min - 1e-9, f"LR below eta_min at step {step}: {lr} < {eta_min}"
             scheduler.step()
 
     def test_lr_at_T_max_equals_eta_min(self):
@@ -153,9 +143,7 @@ class TestWarmupCosineScheduler:
             scheduler.step()
 
         lr = _get_lr(optimizer)
-        assert lr == pytest.approx(5e-5, rel=1e-4), (
-            f"LR at T_max should be ~5e-5, got {lr}"
-        )
+        assert lr == pytest.approx(5e-5, rel=1e-4), f"LR at T_max should be ~5e-5, got {lr}"
 
     def test_warmup_linearity(self):
         """Warmup phase should produce a roughly linear lr increase."""

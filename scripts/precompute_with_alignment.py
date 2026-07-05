@@ -164,10 +164,7 @@ def compute_duration_from_lab(
     text_seq_interspersed = intersperse(_seq, 0)
     expected_len = len(text_seq_interspersed)
     if len(duration_array) != expected_len:
-        return None, (
-            f"Length mismatch: duration array {len(duration_array)} "
-            f"vs interspersed text {expected_len}"
-        )
+        return None, (f"Length mismatch: duration array {len(duration_array)} vs interspersed text {expected_len}")
 
     return duration_array, f"OK ({len(pyopenjtalk_phonemes)} phones, {total_mel_frames} frames)"
 
@@ -206,9 +203,7 @@ def process_sample_with_alignment(
         text_tensor = torch.IntTensor(text_norm)
 
         # 3. Duration from .lab (computed in memory, no intermediate .npy)
-        duration_array, msg = compute_duration_from_lab(
-            lab_path, text, mel_frames, align_mode=align_mode
-        )
+        duration_array, msg = compute_duration_from_lab(lab_path, text, mel_frames, align_mode=align_mode)
         if duration_array is None:
             return str(out_p), True, f"duration conversion failed: {msg}"
 
@@ -216,13 +211,9 @@ def process_sample_with_alignment(
 
         # 4. Validate
         if len(duration) != len(text_tensor):
-            return str(out_p), True, (
-                f"duration/text length mismatch: {len(duration)} vs {len(text_tensor)}"
-            )
+            return str(out_p), True, (f"duration/text length mismatch: {len(duration)} vs {len(text_tensor)}")
         if duration.sum().item() != mel_frames:
-            return str(out_p), True, (
-                f"duration sum mismatch: {duration.sum()} vs {mel_frames}"
-            )
+            return str(out_p), True, (f"duration sum mismatch: {duration.sum()} vs {mel_frames}")
 
         # 5. Save .pt
         torch.save(
@@ -306,16 +297,11 @@ def _text_cache_worker(text: str) -> tuple[str, list[int], str]:
     return text, seq, cleaned
 
 
-def build_text_sequence_cache(
-    texts: list[str], num_workers: int
-) -> dict[str, tuple[list[int], str]]:
+def build_text_sequence_cache(texts: list[str], num_workers: int) -> dict[str, tuple[list[int], str]]:
     """Pre-compute text_to_sequence for every unique text in parallel."""
     unique_texts = list(dict.fromkeys(texts))
     n_unique = len(unique_texts)
-    print(
-        f"[text-cache] {len(texts)} total, {n_unique} unique texts "
-        f"(workers={num_workers})"
-    )
+    print(f"[text-cache] {len(texts)} total, {n_unique} unique texts (workers={num_workers})")
 
     t0 = time.time()
     cache: dict[str, tuple[list[int], str]] = {}
@@ -385,9 +371,7 @@ _HANN_CACHE: dict[str, torch.Tensor] = {}
 def _get_mel_basis_hann(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     key = str(device)
     if key not in _MEL_BASIS_CACHE:
-        mel_np = librosa_mel_fn(
-            sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS, fmin=F_MIN, fmax=F_MAX
-        )
+        mel_np = librosa_mel_fn(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS, fmin=F_MIN, fmax=F_MAX)
         _MEL_BASIS_CACHE[key] = torch.from_numpy(mel_np).float().to(device)
         _HANN_CACHE[key] = torch.hann_window(WIN_LENGTH).to(device)
     return _MEL_BASIS_CACHE[key], _HANN_CACHE[key]
@@ -488,9 +472,7 @@ def _mel_single_cpu(audio: np.ndarray, mel_mean: float, mel_std: float) -> torch
     return mel
 
 
-def _finalize_one(
-    sample: LoadedSample, mel: torch.Tensor, align_mode: str
-) -> tuple[str, bool, str]:
+def _finalize_one(sample: LoadedSample, mel: torch.Tensor, align_mode: str) -> tuple[str, bool, str]:
     """Compute duration, validate and save .pt. No text_to_sequence call."""
     task = sample.task
     out_path = task.out_path
@@ -501,7 +483,8 @@ def _finalize_one(
         julius_raw = [seg[2] for seg in sample.lab_segments]  # type: ignore[arg-type]
         julius_mapped = map_julius_sequence(julius_raw)
         julius_frame_durations = [
-            time_to_frames(seg[0], seg[1]) for seg in sample.lab_segments  # type: ignore[arg-type]
+            time_to_frames(seg[0], seg[1])
+            for seg in sample.lab_segments  # type: ignore[arg-type]
         ]
 
         pyopenjtalk_phonemes = sample.cleaned_text.split()  # type: ignore[union-attr]
@@ -522,13 +505,9 @@ def _finalize_one(
 
         # 3. Validate
         if len(duration) != len(text_tensor):
-            return out_path, True, (
-                f"duration/text length mismatch: {len(duration)} vs {len(text_tensor)}"
-            )
+            return out_path, True, (f"duration/text length mismatch: {len(duration)} vs {len(text_tensor)}")
         if duration.sum().item() != mel_frames:
-            return out_path, True, (
-                f"duration sum mismatch: {duration.sum()} vs {mel_frames}"
-            )
+            return out_path, True, (f"duration sum mismatch: {duration.sum()} vs {mel_frames}")
 
         # 4. Save
         torch.save(
@@ -616,9 +595,7 @@ def run_fast_pipeline(
                 return
 
             for s, mel in zip(pending, mels):
-                save_futures.append(
-                    save_pool.submit(_finalize_one, s, mel, args.align_mode)
-                )
+                save_futures.append(save_pool.submit(_finalize_one, s, mel, args.align_mode))
             pending = []
 
         for fut in load_futures:
@@ -649,9 +626,7 @@ def run_fast_pipeline(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Pre-compute .pt files with Julius durations in a single pass."
-    )
+    parser = argparse.ArgumentParser(description="Pre-compute .pt files with Julius durations in a single pass.")
     parser.add_argument("--filelist", type=str, required=True)
     parser.add_argument("--lab-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, required=True)

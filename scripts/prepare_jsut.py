@@ -64,8 +64,7 @@ def main():
     transcript_files = sorted(jsut_dir.glob("*/transcript_utf8.txt"))
     if not transcript_files:
         raise FileNotFoundError(
-            f"No transcript_utf8.txt found in {jsut_dir}/*/. "
-            "Make sure you have the correct JSUT directory structure."
+            f"No transcript_utf8.txt found in {jsut_dir}/*/. Make sure you have the correct JSUT directory structure."
         )
 
     print(f"[*] Found {len(transcript_files)} transcript files in {jsut_dir}")

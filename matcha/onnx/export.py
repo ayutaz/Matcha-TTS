@@ -117,7 +117,9 @@ def main():
         help="Vocoder checkpoint to embed  in the ONNX graph for an `e2e` like experience",
     )
     parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version to use (default 17)")
-    parser.add_argument("--quantize", default=False, action="store_true", help="Apply INT8 dynamic quantization after export")
+    parser.add_argument(
+        "--quantize", default=False, action="store_true", help="Apply INT8 dynamic quantization after export"
+    )
 
     args = parser.parse_args()
 

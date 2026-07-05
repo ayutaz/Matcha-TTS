@@ -5,6 +5,7 @@ Usage:
         --pt-dir data/jvs_precomputed_v2/train \
         --expect-durations
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -58,16 +59,14 @@ def validate(pt_dir: Path, expect_durations: bool) -> dict:
 
             # 長さ一致
             if len(dur) != len(text):
-                stats["errors"].append((pt_path.name,
-                    f"Duration len ({len(dur)}) != text len ({len(text)})"))
+                stats["errors"].append((pt_path.name, f"Duration len ({len(dur)}) != text len ({len(text)})"))
 
             # duration合計 vs mel長（generate_pathが暗黙に仮定）
             dur_sum = dur.sum().item()
             mel_len = mel.shape[-1]
             if dur_sum != mel_len:
                 stats["dur_sum_mismatches"] += 1
-                stats["errors"].append((pt_path.name,
-                    f"Duration sum ({dur_sum}) != mel len ({mel_len})"))
+                stats["errors"].append((pt_path.name, f"Duration sum ({dur_sum}) != mel len ({mel_len})"))
 
             # 負値チェック
             if (dur < 0).any():
@@ -83,9 +82,9 @@ def validate(pt_dir: Path, expect_durations: bool) -> dict:
 
 def print_report(stats: dict, expect_durations: bool):
     """Print human-readable report."""
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("Validation Report")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     print(f"Total files:          {stats['total']}")
     print(f"With durations:       {stats['with_durations']}")
     print(f"Without durations:    {stats['without_durations']}")
@@ -111,8 +110,7 @@ def print_report(stats: dict, expect_durations: bool):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Validate precomputed .pt files")
     parser.add_argument("--pt-dir", type=str, required=True, help="Directory with .pt files")
-    parser.add_argument("--expect-durations", action="store_true",
-                       help="Require all .pt files to contain durations")
+    parser.add_argument("--expect-durations", action="store_true", help="Require all .pt files to contain durations")
     args = parser.parse_args(argv)
 
     pt_dir = Path(args.pt_dir)

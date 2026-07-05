@@ -54,7 +54,7 @@ class ProfilingCallback(Callback):
         recent = self.step_times[-self.log_interval :]
         mean_ms = statistics.mean(recent) * 1000
         rank_zero_info(
-            f"[Profiling] Steps {len(self.step_times)}: {mean_ms:.1f} ms/step ({1000/mean_ms:.1f} steps/s)"
+            f"[Profiling] Steps {len(self.step_times)}: {mean_ms:.1f} ms/step ({1000 / mean_ms:.1f} steps/s)"
         )
 
     @rank_zero_only
@@ -69,11 +69,11 @@ class ProfilingCallback(Callback):
         rank_zero_info("=" * 60)
         rank_zero_info("PROFILING REPORT")
         rank_zero_info(f"  Steps profiled: {len(times)}")
-        rank_zero_info(f"  Mean:   {mean_ms:.1f} ms/step ({1000/mean_ms:.1f} steps/s)")
+        rank_zero_info(f"  Mean:   {mean_ms:.1f} ms/step ({1000 / mean_ms:.1f} steps/s)")
         rank_zero_info(f"  Median: {median_ms:.1f} ms/step")
         rank_zero_info(f"  Stdev:  {std_ms:.1f} ms")
-        rank_zero_info(f"  Min:    {min(times)*1000:.1f} ms")
-        rank_zero_info(f"  Max:    {max(times)*1000:.1f} ms")
+        rank_zero_info(f"  Min:    {min(times) * 1000:.1f} ms")
+        rank_zero_info(f"  Max:    {max(times) * 1000:.1f} ms")
         if torch.cuda.is_available():
-            rank_zero_info(f"  GPU Memory: {torch.cuda.max_memory_allocated()/1e9:.2f} GB peak")
+            rank_zero_info(f"  GPU Memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB peak")
         rank_zero_info("=" * 60)

@@ -54,17 +54,13 @@ def load_duration(durations_dir: Path, spk_name: str, stem: str, expected_text_l
     dur_tensor = torch.from_numpy(dur).long()  # int64 — collateのtorch.zeros(dtype=torch.long)と一致
     if len(dur_tensor) != expected_text_len:
         raise ValueError(
-            f"Duration length mismatch for {npy_name}: "
-            f"duration={len(dur_tensor)}, text={expected_text_len}"
+            f"Duration length mismatch for {npy_name}: duration={len(dur_tensor)}, text={expected_text_len}"
         )
     # B2: duration sum検証
     if mel_frames is not None:
         dur_sum = dur_tensor.sum().item()
         if dur_sum != mel_frames:
-            raise ValueError(
-                f"Duration sum mismatch for {npy_name}: "
-                f"sum(duration)={dur_sum}, mel_frames={mel_frames}"
-            )
+            raise ValueError(f"Duration sum mismatch for {npy_name}: sum(duration)={dur_sum}, mel_frames={mel_frames}")
     return dur_tensor
 
 
@@ -112,9 +108,7 @@ def process_sample(
     # -- duration (optional) --
     duration = None
     if durations_dir is not None:
-        duration = load_duration(
-            Path(durations_dir), spk_name, wav_p.stem, len(text_norm), mel_frames=mel.shape[-1]
-        )
+        duration = load_duration(Path(durations_dir), spk_name, wav_p.stem, len(text_norm), mel_frames=mel.shape[-1])
         if duration is None:
             return out_path, True  # skipped
 
@@ -140,9 +134,7 @@ def process_sample_text_only(text: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Pre-compute mel spectrograms and text sequences for JVS dataset."
-    )
+    parser = argparse.ArgumentParser(description="Pre-compute mel spectrograms and text sequences for JVS dataset.")
     parser.add_argument(
         "--filelist",
         type=str,
@@ -183,7 +175,7 @@ def main():
         type=str,
         default=None,
         help="Directory containing .npy duration files from Julius forced alignment. "
-             "Naming: {spk_name}_{utterance_id}.npy",
+        "Naming: {spk_name}_{utterance_id}.npy",
     )
     args = parser.parse_args()
 

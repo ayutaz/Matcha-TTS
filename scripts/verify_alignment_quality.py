@@ -133,11 +133,13 @@ def check_length_consistency(
         expected_len = len(interspersed)
 
         if len(dur) != expected_len:
-            problems.append({
-                "name": name,
-                "expected_len": expected_len,
-                "actual_len": len(dur),
-            })
+            problems.append(
+                {
+                    "name": name,
+                    "expected_len": expected_len,
+                    "actual_len": len(dur),
+                }
+            )
     return problems
 
 
@@ -269,20 +271,11 @@ def print_summary(report: dict) -> None:
     print(f"Total loaded: {report['total_loaded']}")
     if report["missing_files"] > 0:
         print(f"Missing duration files: {report['missing_files']}")
-    print(
-        f"Degenerate samples: {cs['degenerate_count']} "
-        f"({cs['degenerate_rate'] * 100:.2f}%)"
-    )
-    print(
-        f"Phoneme duration: mean={ph['mean']}, median={ph['median']}, "
-        f"std={ph['std']}"
-    )
+    print(f"Degenerate samples: {cs['degenerate_count']} ({cs['degenerate_rate'] * 100:.2f}%)")
+    print(f"Phoneme duration: mean={ph['mean']}, median={ph['median']}, std={ph['std']}")
     print(f"  <= 1 frame: {ph['pct_le1'] * 100:.1f}%")
     print(f"  <= 2 frames: {ph['pct_le2'] * 100:.1f}%")
-    print(
-        f"Blank[0] mean duration: {bl['mean_blank0']} "
-        f"(all zero: {bl['all_zero_rate'] * 100:.1f}%)"
-    )
+    print(f"Blank[0] mean duration: {bl['mean_blank0']} (all zero: {bl['all_zero_rate'] * 100:.1f}%)")
 
     if report["length_mismatches"]:
         print(f"\nLength mismatches: {len(report['length_mismatches'])}")
@@ -320,9 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code: 0 on success, 1 on error.
     """
-    parser = argparse.ArgumentParser(
-        description="Verify alignment quality of Julius-generated duration arrays."
-    )
+    parser = argparse.ArgumentParser(description="Verify alignment quality of Julius-generated duration arrays.")
     parser.add_argument(
         "--duration-dir",
         type=str,

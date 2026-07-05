@@ -1,4 +1,5 @@
 """Tests for precompute_dataset.py duration embedding."""
+
 import sys
 from pathlib import Path
 
@@ -108,9 +109,8 @@ class TestProcessSampleWithDuration:
         # melフレーム数を事前計算（duration sumと一致させるため）
         audio_tensor = torch.from_numpy(audio_data).unsqueeze(0)
         from matcha.utils.audio import mel_spectrogram as _mel_spec
-        mel_frames = _mel_spec(
-            audio_tensor, 1024, 80, 22050, 256, 1024, 0.0, 8000, center=False
-        ).squeeze().shape[-1]
+
+        mel_frames = _mel_spec(audio_tensor, 1024, 80, 22050, 256, 1024, 0.0, 8000, center=False).squeeze().shape[-1]
 
         # ダミーduration作成（sumがmel_framesと一致するよう分配）
         dur_dir = tmp_path / "durations"
@@ -120,7 +120,7 @@ class TestProcessSampleWithDuration:
         base = mel_frames // n_phonemes
         remainder = mel_frames % n_phonemes
         dur[1::2] = base
-        dur[1:2 * remainder:2] += 1  # 余りを先頭音素に分配
+        dur[1 : 2 * remainder : 2] += 1  # 余りを先頭音素に分配
         np.save(dur_dir / "jvs001_UTT001.npy", dur)
 
         # 実行

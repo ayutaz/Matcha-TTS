@@ -4,6 +4,7 @@ Usage:
     uv run python scripts/check_training_health.py \
         --log-dir logs/train/jvs_aligned/runs/<run_dir>/
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -55,9 +56,9 @@ def check_health(log_dir: Path) -> dict:
 
 def print_health_report(results: dict):
     """Print training health report to stdout."""
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("Training Health Check")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     print(f"Log directory:        {results['log_dir']}")
     print(f"Checkpoints found:    {results['checkpoints_found']}")
     print(f"last.ckpt exists:     {results['last_ckpt_exists']}")

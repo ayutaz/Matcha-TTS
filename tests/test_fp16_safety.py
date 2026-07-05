@@ -50,9 +50,7 @@ class TestPriorLossF32:
         """Replicate the prior_loss computation from matcha_tts.py."""
         LOG_2PI = math.log(2 * math.pi)
         masked_n = torch.sum(y_mask) * n_feats
-        prior_loss = 0.5 * (
-            F.mse_loss(y.float() * y_mask, mu_y.float() * y_mask, reduction="sum") / masked_n + LOG_2PI
-        )
+        prior_loss = 0.5 * (F.mse_loss(y.float() * y_mask, mu_y.float() * y_mask, reduction="sum") / masked_n + LOG_2PI)
         return prior_loss
 
     def test_fp16_inputs_produce_fp32_loss(self):
@@ -98,9 +96,7 @@ class TestDiffLossF32:
         u = torch.randn(2, 80, 100, dtype=torch.float16)
         mask = torch.ones(2, 1, 100, dtype=torch.float32)
 
-        loss = F.mse_loss(estimator_out.float(), u.float(), reduction="sum") / (
-            torch.sum(mask) * u.shape[1]
-        )
+        loss = F.mse_loss(estimator_out.float(), u.float(), reduction="sum") / (torch.sum(mask) * u.shape[1])
         assert loss.dtype == torch.float32
 
     def test_large_estimator_output_no_overflow(self):
@@ -109,9 +105,7 @@ class TestDiffLossF32:
         u = torch.full((2, 80, 200), -250.0, dtype=torch.float16)
         mask = torch.ones(2, 1, 200, dtype=torch.float32)
 
-        loss = F.mse_loss(estimator_out.float(), u.float(), reduction="sum") / (
-            torch.sum(mask) * u.shape[1]
-        )
+        loss = F.mse_loss(estimator_out.float(), u.float(), reduction="sum") / (torch.sum(mask) * u.shape[1])
         assert not torch.isnan(loss)
         assert not torch.isinf(loss)
 

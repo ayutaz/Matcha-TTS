@@ -278,9 +278,7 @@ class TestPytorchVsCython:
         m = torch.ones(b, tx, ty)
         cy = _run_cython(v, m)
         pt = _run_pytorch(v, m)
-        assert torch.equal(cy, pt), (
-            f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
-        )
+        assert torch.equal(cy, pt), f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
 
     def test_dtype_preservation(self):
         """PyTorch implementation should return the same dtype as input."""
@@ -369,9 +367,7 @@ class TestOptimizedVsOriginal:
         m = torch.ones(b, tx, ty)
         orig = _run_pytorch_original(v, m)
         optim = _run_pytorch(v, m)
-        assert torch.equal(orig, optim), (
-            f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
-        )
+        assert torch.equal(orig, optim), f"Mismatch at seed={seed}, b={b}, tx={tx}, ty={ty}"
 
     @pytest.mark.parametrize("seed", list(range(20)))
     def test_fuzz_with_masks(self, seed):
@@ -392,9 +388,7 @@ class TestOptimizedVsOriginal:
             m[i, :, ty_i:] = 0
         orig = _run_pytorch_original(v, m)
         optim = _run_pytorch(v, m)
-        assert torch.equal(orig, optim), (
-            f"Mismatch at seed={seed}, b={b}, tx_max={tx_max}, ty_max={ty_max}"
-        )
+        assert torch.equal(orig, optim), f"Mismatch at seed={seed}, b={b}, tx_max={tx_max}, ty_max={ty_max}"
 
 
 class TestEdgeCases:

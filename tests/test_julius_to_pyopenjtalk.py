@@ -57,8 +57,20 @@ class TestCompoundConsonants:
     def test_map_compound_consonants(self):
         """ky, sh, ch, ts, ty, ny, hy, ry, gy, by, py, my, dy, fy should map to themselves."""
         compounds = [
-            "ky", "sh", "ch", "ts", "ty", "ny", "hy", "ry",
-            "gy", "by", "py", "my", "dy", "fy",
+            "ky",
+            "sh",
+            "ch",
+            "ts",
+            "ty",
+            "ny",
+            "hy",
+            "ry",
+            "gy",
+            "by",
+            "py",
+            "my",
+            "dy",
+            "fy",
         ]
         for c in compounds:
             assert map_julius_phoneme(c) == c
@@ -179,9 +191,7 @@ class TestMappingIntegrity:
         """All values in JULIUS_TO_PYOPENJTALK must be in symbols_ja."""
         valid_symbols = set(symbols_ja)
         for julius_ph, pyopenjtalk_ph in JULIUS_TO_PYOPENJTALK.items():
-            assert pyopenjtalk_ph in valid_symbols, (
-                f"Mapping {julius_ph!r} -> {pyopenjtalk_ph!r} is not in symbols_ja"
-            )
+            assert pyopenjtalk_ph in valid_symbols, f"Mapping {julius_ph!r} -> {pyopenjtalk_ph!r} is not in symbols_ja"
 
     def test_mapping_is_not_empty(self):
         """The mapping dictionary should not be empty."""
@@ -238,9 +248,7 @@ class TestProsodySymbols:
         """Prosody symbols (^, $, ?, _, #, [, ]) should not be in JULIUS_TO_PYOPENJTALK keys."""
         julius_keys = set(JULIUS_TO_PYOPENJTALK.keys())
         for symbol in PROSODY_SYMBOLS:
-            assert symbol not in julius_keys, (
-                f"Prosody symbol {symbol!r} should not be a Julius mapping key"
-            )
+            assert symbol not in julius_keys, f"Prosody symbol {symbol!r} should not be a Julius mapping key"
 
     def test_prosody_symbols_are_in_symbols_ja(self):
         """Prosody symbols should be valid symbols_ja entries."""
@@ -274,19 +282,62 @@ class TestJuliusPhoneCoverage:
         # All expected Julius output phonemes
         expected_julius_phonemes = {
             # Vowels
-            "a", "i", "u", "e", "o",
+            "a",
+            "i",
+            "u",
+            "e",
+            "o",
             # Basic consonants
-            "k", "s", "t", "n", "h", "m", "y", "r", "w",
-            "g", "z", "d", "b", "p", "f", "v",
+            "k",
+            "s",
+            "t",
+            "n",
+            "h",
+            "m",
+            "y",
+            "r",
+            "w",
+            "g",
+            "z",
+            "d",
+            "b",
+            "p",
+            "f",
+            "v",
             # Compound consonants
-            "ky", "sh", "ch", "ts", "ty", "ny", "hy", "ry",
-            "gy", "by", "py", "my", "dy", "fy", "j", "kw", "gw",
+            "ky",
+            "sh",
+            "ch",
+            "ts",
+            "ty",
+            "ny",
+            "hy",
+            "ry",
+            "gy",
+            "by",
+            "py",
+            "my",
+            "dy",
+            "fy",
+            "j",
+            "kw",
+            "gw",
             # Special
-            "N", "cl", "q", "pau",
+            "N",
+            "cl",
+            "q",
+            "pau",
             # Long vowels
-            "a:", "i:", "u:", "e:", "o:",
+            "a:",
+            "i:",
+            "u:",
+            "e:",
+            "o:",
             # Silence
-            "silB", "silE", "sp", "sil",
+            "silB",
+            "silE",
+            "sp",
+            "sil",
         }
         julius_keys = set(JULIUS_TO_PYOPENJTALK.keys())
 
@@ -296,14 +347,57 @@ class TestJuliusPhoneCoverage:
     def test_no_extra_keys_beyond_julius(self):
         """All mapping keys should be recognized Julius phonemes (no typos or extras)."""
         expected_julius_phonemes = {
-            "a", "i", "u", "e", "o",
-            "k", "s", "t", "n", "h", "m", "y", "r", "w",
-            "g", "z", "d", "b", "p", "f", "v",
-            "ky", "sh", "ch", "ts", "ty", "ny", "hy", "ry",
-            "gy", "by", "py", "my", "dy", "fy", "j", "kw", "gw",
-            "N", "cl", "q", "pau",
-            "a:", "i:", "u:", "e:", "o:",
-            "silB", "silE", "sp", "sil",
+            "a",
+            "i",
+            "u",
+            "e",
+            "o",
+            "k",
+            "s",
+            "t",
+            "n",
+            "h",
+            "m",
+            "y",
+            "r",
+            "w",
+            "g",
+            "z",
+            "d",
+            "b",
+            "p",
+            "f",
+            "v",
+            "ky",
+            "sh",
+            "ch",
+            "ts",
+            "ty",
+            "ny",
+            "hy",
+            "ry",
+            "gy",
+            "by",
+            "py",
+            "my",
+            "dy",
+            "fy",
+            "j",
+            "kw",
+            "gw",
+            "N",
+            "cl",
+            "q",
+            "pau",
+            "a:",
+            "i:",
+            "u:",
+            "e:",
+            "o:",
+            "silB",
+            "silE",
+            "sp",
+            "sil",
         }
         julius_keys = set(JULIUS_TO_PYOPENJTALK.keys())
 

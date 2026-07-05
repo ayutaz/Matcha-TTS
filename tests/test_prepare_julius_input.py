@@ -67,10 +67,7 @@ class TestParseFilelist:
         """Blank lines should be skipped."""
         filelist = tmp_path / "test.txt"
         filelist.write_text(
-            "/data/wavs/jvs001/A.wav|0|テスト\n"
-            "\n"
-            "  \n"
-            "/data/wavs/jvs001/B.wav|0|テスト2\n",
+            "/data/wavs/jvs001/A.wav|0|テスト\n\n  \n/data/wavs/jvs001/B.wav|0|テスト2\n",
             encoding="utf-8",
         )
         entries = parse_filelist(str(filelist))
@@ -80,9 +77,7 @@ class TestParseFilelist:
         """Lines with wrong number of fields should be skipped."""
         filelist = tmp_path / "test.txt"
         filelist.write_text(
-            "/data/wavs/jvs001/A.wav|0|テスト\n"
-            "bad_line_no_pipes\n"
-            "/data/wavs/jvs001/B.wav|0|テスト2\n",
+            "/data/wavs/jvs001/A.wav|0|テスト\nbad_line_no_pipes\n/data/wavs/jvs001/B.wav|0|テスト2\n",
             encoding="utf-8",
         )
         entries = parse_filelist(str(filelist))
@@ -108,7 +103,7 @@ class TestTextToKatakana:
         assert isinstance(result, str)
         assert len(result) > 0
         # Should contain katakana characters
-        assert any("\u30A0" <= ch <= "\u30FF" for ch in result)
+        assert any("\u30a0" <= ch <= "\u30ff" for ch in result)
 
     def test_text_to_katakana_kanji(self):
         """Kanji text should be converted to katakana."""
@@ -116,7 +111,7 @@ class TestTextToKatakana:
         assert isinstance(result, str)
         assert len(result) > 0
         # No kanji should remain
-        assert not any("\u4E00" <= ch <= "\u9FFF" for ch in result)
+        assert not any("\u4e00" <= ch <= "\u9fff" for ch in result)
 
     def test_text_to_katakana_punctuation_removed(self):
         """Punctuation marks should be removed from the output."""

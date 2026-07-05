@@ -1,4 +1,5 @@
 """Tests for training evaluation and monitoring scripts."""
+
 import sys
 from pathlib import Path
 
@@ -60,10 +61,14 @@ class TestEvaluateDurations:
         self._make_eval_data(tmp_path, 1)
         from evaluate_durations import main
 
-        ret = main([
-            "--checkpoint", str(tmp_path / "nonexistent.ckpt"),
-            "--data-dir", str(tmp_path),
-        ])
+        ret = main(
+            [
+                "--checkpoint",
+                str(tmp_path / "nonexistent.ckpt"),
+                "--data-dir",
+                str(tmp_path),
+            ]
+        )
         assert ret == 0
 
     def test_output_dir_creation(self, tmp_path):
@@ -72,11 +77,16 @@ class TestEvaluateDurations:
         out_dir = tmp_path / "results" / "nested"
         from evaluate_durations import main
 
-        main([
-            "--checkpoint", "dummy.ckpt",
-            "--data-dir", str(tmp_path),
-            "--output-dir", str(out_dir),
-        ])
+        main(
+            [
+                "--checkpoint",
+                "dummy.ckpt",
+                "--data-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(out_dir),
+            ]
+        )
         assert out_dir.exists()
 
     def test_duration_sum_consistency(self, tmp_path):
@@ -86,9 +96,7 @@ class TestEvaluateDurations:
             data = torch.load(pt_path, weights_only=True)
             dur_sum = data["durations"].sum().item()
             mel_len = data["mel"].shape[1]
-            assert dur_sum == mel_len, (
-                f"{pt_path.name}: duration sum {dur_sum} != mel length {mel_len}"
-            )
+            assert dur_sum == mel_len, f"{pt_path.name}: duration sum {dur_sum} != mel length {mel_len}"
 
 
 class TestCheckTrainingHealth:

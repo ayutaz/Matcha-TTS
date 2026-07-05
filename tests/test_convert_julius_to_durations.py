@@ -70,11 +70,7 @@ class TestParseLabFile:
     def test_basic_parsing(self, tmp_path):
         """3-line HTK .lab file is parsed correctly."""
         lab = tmp_path / "test.lab"
-        lab.write_text(
-            "0 2100000 silB\n"
-            "2100000 5000000 k\n"
-            "5000000 8000000 silE\n"
-        )
+        lab.write_text("0 2100000 silB\n2100000 5000000 k\n5000000 8000000 silE\n")
         result = parse_lab_file(lab)
         assert len(result) == 3
         assert result[0][2] == "silB"
@@ -92,11 +88,7 @@ class TestParseLabFile:
         """100ns units are correctly converted to seconds."""
         # 10_000_000 (100ns units) = 1.0 second
         lab = tmp_path / "time.lab"
-        lab.write_text(
-            "0 10000000 silB\n"
-            "10000000 20000000 a\n"
-            "20000000 30000000 silE\n"
-        )
+        lab.write_text("0 10000000 silB\n10000000 20000000 a\n20000000 30000000 silE\n")
         result = parse_lab_file(lab)
         assert result[0] == pytest.approx((0.0, 1.0, "silB"), abs=1e-9)
         assert result[1] == pytest.approx((1.0, 2.0, "a"), abs=1e-9)
@@ -105,23 +97,14 @@ class TestParseLabFile:
     def test_blank_lines_ignored(self, tmp_path):
         """Blank lines in .lab file are skipped."""
         lab = tmp_path / "blanks.lab"
-        lab.write_text(
-            "0 10000000 silB\n"
-            "\n"
-            "10000000 20000000 silE\n"
-            "\n"
-        )
+        lab.write_text("0 10000000 silB\n\n10000000 20000000 silE\n\n")
         result = parse_lab_file(lab)
         assert len(result) == 2
 
     def test_parse_lab_invalid_timestamp_skipped(self, tmp_path, caplog):
         """Lines with non-numeric timestamps are skipped with a warning."""
         lab = tmp_path / "invalid.lab"
-        lab.write_text(
-            "0 10000000 silB\n"
-            "abc def k\n"
-            "10000000 20000000 silE\n"
-        )
+        lab.write_text("0 10000000 silB\nabc def k\n10000000 20000000 silE\n")
         import logging
 
         with caplog.at_level(logging.WARNING):
@@ -136,12 +119,7 @@ class TestParseLabFile:
     def test_parse_lab_partial_corruption(self, tmp_path, caplog):
         """File with mix of valid and corrupt lines returns only valid entries."""
         lab = tmp_path / "partial.lab"
-        lab.write_text(
-            "0 5000000 silB\n"
-            "5000000 NOTANUMBER k\n"
-            "5000000 10000000 a\n"
-            "10000000 15000000 silE\n"
-        )
+        lab.write_text("0 5000000 silB\n5000000 NOTANUMBER k\n5000000 10000000 a\n10000000 15000000 silE\n")
         import logging
 
         with caplog.at_level(logging.WARNING):
@@ -242,7 +220,7 @@ class TestAlignJuliusWithPyopenjtalk:
         """Alignment for 'konnichiwa' (the standard test case)."""
         # Julius output (already mapped to pyopenjtalk symbols):
         julius_ph = ["sil", "k", "o", "N", "n", "i", "ch", "i", "w", "a", "sil"]
-        julius_dur = [10,    5,   4,   3,   4,   3,   5,    3,   4,   5,   8]
+        julius_dur = [10, 5, 4, 3, 4, 3, 5, 3, 4, 5, 8]
 
         # pyopenjtalk output: "^ k o [ N n i ch i w a $"
         pyopenjtalk_ph = ["^", "k", "o", "[", "N", "n", "i", "ch", "i", "w", "a", "$"]
@@ -295,11 +273,11 @@ class TestAlignJuliusWithPyopenjtalk:
         pyopenjtalk_ph = ["^", "a", "_", "i", "$"]
         result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur)
 
-        assert result[0] == 5   # ^
+        assert result[0] == 5  # ^
         assert result[1] == 10  # a
         assert result[2] == 15  # _ -> pau
         assert result[3] == 10  # i
-        assert result[4] == 5   # $
+        assert result[4] == 5  # $
 
     def test_devoiced_vowel_matching(self):
         """Devoiced vowels (uppercase A,I,U) match Julius lowercase."""
@@ -376,9 +354,7 @@ class TestAlignJuliusWithPyopenjtalk:
 
     def test_empty_pyopenjtalk_returns_empty(self):
         """Empty pyopenjtalk sequence returns empty list."""
-        result = align_julius_with_pyopenjtalk(
-            ["sil", "a", "sil"], [], [5, 10, 5]
-        )
+        result = align_julius_with_pyopenjtalk(["sil", "a", "sil"], [], [5, 10, 5])
         assert result == []
 
     def test_question_mark_prosody(self):
@@ -442,17 +418,15 @@ class TestAlignDTW:
         result = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
 
         assert len(result) == len(pyopenjtalk_ph)
-        assert result[0] == 5   # ^
-        assert result[1] == 4   # k
-        assert result[2] == 3   # o
-        assert result[3] == 4   # i
-        assert result[4] == 5   # $
+        assert result[0] == 5  # ^
+        assert result[1] == 4  # k
+        assert result[2] == 3  # o
+        assert result[3] == 4  # i
+        assert result[4] == 5  # $
 
     def test_dtw_empty_pyopenjtalk(self):
         """DTW returns empty for empty pyopenjtalk."""
-        result = align_julius_with_pyopenjtalk_dtw(
-            ["sil", "a", "sil"], [], [5, 10, 5]
-        )
+        result = align_julius_with_pyopenjtalk_dtw(["sil", "a", "sil"], [], [5, 10, 5])
         assert result == []
 
 
@@ -600,22 +574,18 @@ class TestAlignMode:
     def test_sequential_mode(self):
         """align_mode='sequential' uses sequential alignment."""
         julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
         assert len(result) == len(pyopenjtalk_ph)
         assert result[0] == 10  # ^
-        assert result[3] == 0   # [
+        assert result[3] == 0  # [
 
     def test_dtw_mode(self):
         """align_mode='dtw' uses DTW alignment."""
         julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw")
         assert len(result) == len(pyopenjtalk_ph)
         assert result[0] == 10  # ^
-        assert result[3] == 0   # [
+        assert result[3] == 0  # [
 
     def test_auto_mode_short_uses_dtw(self):
         """auto mode routes short utterances (< 30 real phonemes) to DTW."""
@@ -624,13 +594,9 @@ class TestAlignMode:
         julius_dur = [10, 5, 4, 3, 4, 3, 5, 3, 4, 5, 8]
         pyopenjtalk_ph = ["^", "k", "o", "[", "N", "n", "i", "ch", "i", "w", "a", "$"]
 
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto")
         # Should produce same result as explicit DTW
-        result_dtw = align_julius_with_pyopenjtalk_dtw(
-            julius_ph, pyopenjtalk_ph, julius_dur
-        )
+        result_dtw = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
         assert result == result_dtw
 
     def test_auto_mode_long_uses_sequential(self):
@@ -641,9 +607,7 @@ class TestAlignMode:
         # pyopenjtalk: ^ + 40 phonemes + $ = 42 items, 40 real phonemes
         pyopenjtalk_ph = ["^"] + ["a", "i"] * 20 + ["$"]
 
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="auto")
         assert len(result) == len(pyopenjtalk_ph)
         assert result[0] == 5  # ^
         assert result[-1] == 5  # $
@@ -651,12 +615,8 @@ class TestAlignMode:
     def test_dtw_and_sequential_agree_on_clean(self):
         """DTW and sequential produce identical results on clean input."""
         julius_ph, pyopenjtalk_ph, julius_dur = self._simple_data()
-        result_seq = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
-        result_dtw = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw"
-        )
+        result_seq = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
+        result_dtw = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="dtw")
         assert result_seq == result_dtw
 
 
@@ -675,9 +635,7 @@ class TestLookAheadWindow:
         julius_dur = [5, 4, 1, 1, 1, 3, 5]
 
         pyopenjtalk_ph = ["^", "k", "o", "$"]
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
         assert result[0] == 5  # ^
         assert result[1] == 4  # k matched directly
         # o is 3 positions past k+1 (at index 5, j_idx would be 2, so offset 3)
@@ -692,9 +650,7 @@ class TestLookAheadWindow:
         julius_dur = [5, 4, 1, 1, 1, 3, 5]
 
         pyopenjtalk_ph = ["^", "s", "U", "$"]
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
         assert result[2] == 3  # U matched to Julius "u" within 5-window
 
 
@@ -714,17 +670,17 @@ class TestProcessSingleUtterance:
         # Julius segmentation: silB k o N n i ch i w a silE
         # Approximate timings (total ~0.93s = ~80 frames at 22050/256)
         lab_content = (
-            "0 2100000 silB\n"          # 0.00-0.21s
-            "2100000 3200000 k\n"       # 0.21-0.32s
-            "3200000 4100000 o\n"       # 0.32-0.41s
-            "4100000 4800000 N\n"       # 0.41-0.48s
-            "4800000 5600000 n\n"       # 0.48-0.56s
-            "5600000 6300000 i\n"       # 0.56-0.63s
-            "6300000 7200000 ch\n"      # 0.63-0.72s
-            "7200000 7900000 i\n"       # 0.72-0.79s
-            "7900000 8600000 w\n"       # 0.79-0.86s
-            "8600000 9300000 a\n"       # 0.86-0.93s
-            "9300000 11500000 silE\n"   # 0.93-1.15s
+            "0 2100000 silB\n"  # 0.00-0.21s
+            "2100000 3200000 k\n"  # 0.21-0.32s
+            "3200000 4100000 o\n"  # 0.32-0.41s
+            "4100000 4800000 N\n"  # 0.41-0.48s
+            "4800000 5600000 n\n"  # 0.48-0.56s
+            "5600000 6300000 i\n"  # 0.56-0.63s
+            "6300000 7200000 ch\n"  # 0.63-0.72s
+            "7200000 7900000 i\n"  # 0.72-0.79s
+            "7900000 8600000 w\n"  # 0.79-0.86s
+            "8600000 9300000 a\n"  # 0.86-0.93s
+            "9300000 11500000 silE\n"  # 0.93-1.15s
         )
         lab_file = tmp_path / "test.lab"
         lab_file.write_text(lab_content)
@@ -759,9 +715,7 @@ class TestProcessSingleUtterance:
         lab_file.write_text("")
         output_file = tmp_path / "empty.npy"
 
-        success, msg = process_single_utterance(
-            str(lab_file), "こんにちは", 100, str(output_file)
-        )
+        success, msg = process_single_utterance(str(lab_file), "こんにちは", 100, str(output_file))
         assert not success
         assert "Empty" in msg
 
@@ -793,9 +747,7 @@ class TestProcessSingleUtterance:
         output_file = tmp_path / "len_test.npy"
 
         total_frames = time_to_frames(0.0, 1.15)
-        success, msg = process_single_utterance(
-            str(lab_file), text, total_frames, str(output_file)
-        )
+        success, msg = process_single_utterance(str(lab_file), text, total_frames, str(output_file))
         assert success, f"Pipeline failed: {msg}"
 
         arr = np.load(str(output_file))

@@ -46,17 +46,11 @@ def check_prerequisites(segkit_dir):
     """
     segkit_path = Path(segkit_dir)
     if not segkit_path.is_dir():
-        raise FileNotFoundError(
-            f"segmentation-kit not found at {segkit_dir}. "
-            f"Run: bash scripts/setup_julius.sh"
-        )
+        raise FileNotFoundError(f"segmentation-kit not found at {segkit_dir}. Run: bash scripts/setup_julius.sh")
 
     segment_script = segkit_path / "segment_julius.pl"
     if not segment_script.exists():
-        raise FileNotFoundError(
-            f"segment_julius.pl not found in {segkit_dir}. "
-            f"The segmentation-kit may be incomplete."
-        )
+        raise FileNotFoundError(f"segment_julius.pl not found in {segkit_dir}. The segmentation-kit may be incomplete.")
 
     if not shutil.which("julius"):
         raise FileNotFoundError(
@@ -67,8 +61,7 @@ def check_prerequisites(segkit_dir):
 
     if not shutil.which("perl"):
         raise FileNotFoundError(
-            "perl command not found in PATH. Install via:\n"
-            "  Ubuntu/Debian: sudo apt-get install perl"
+            "perl command not found in PATH. Install via:\n  Ubuntu/Debian: sudo apt-get install perl"
         )
 
 
@@ -155,9 +148,7 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
                     break
             if not found:
                 stderr_snippet = result.stderr[-500:] if result.stderr else "(no stderr)"
-                errors.append(
-                    (name, f"No .lab file produced. stderr: {stderr_snippet}")
-                )
+                errors.append((name, f"No .lab file produced. stderr: {stderr_snippet}"))
 
     return successes, errors
 
@@ -191,9 +182,7 @@ def _align_single(args_tuple):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run Julius segmentation-kit for forced alignment."
-    )
+    parser = argparse.ArgumentParser(description="Run Julius segmentation-kit for forced alignment.")
     parser.add_argument(
         "--input-dir",
         type=str,
@@ -280,16 +269,12 @@ def main():
     if args.batch_size == 1:
         # Single-file mode with parallel workers
         tasks = [
-            (name, str(wav_files[name]), str(txt_files[name]),
-             args.segkit_dir, str(output_dir), args.timeout)
+            (name, str(wav_files[name]), str(txt_files[name]), args.segkit_dir, str(output_dir), args.timeout)
             for name in todo_names
         ]
 
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(_align_single, task): task[0]
-                for task in tasks
-            }
+            futures = {executor.submit(_align_single, task): task[0] for task in tasks}
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
@@ -309,14 +294,15 @@ def main():
                     tqdm.write(f"ERROR [{name}]: {e}")
     else:
         # Batch mode: group files and process sequentially
-        for i in tqdm(range(0, len(todo_names), args.batch_size),
-                      desc="Aligning batches", unit="batch"):
-            batch_names = todo_names[i:i + args.batch_size]
+        for i in tqdm(range(0, len(todo_names), args.batch_size), desc="Aligning batches", unit="batch"):
+            batch_names = todo_names[i : i + args.batch_size]
             batch_wav = [(n, str(wav_files[n])) for n in batch_names]
             batch_txt = [(n, str(txt_files[n])) for n in batch_names]
             successes, errors = run_segkit_batch(
-                batch_wav, batch_txt,
-                args.segkit_dir, str(output_dir),
+                batch_wav,
+                batch_txt,
+                args.segkit_dir,
+                str(output_dir),
                 timeout=args.timeout,
             )
             all_successes.extend([s[0] for s in successes])

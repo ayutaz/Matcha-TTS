@@ -73,9 +73,7 @@ class TestDurationToGeneratePath:
     def test_duration_sum_matches_mel_length(self):
         """Duration total matches mel length and attn is fully assigned."""
         # 実際のM1出力に近い形式
-        durations = torch.tensor(
-            [[0, 3, 0, 7, 0, 2, 0, 12, 0, 5, 0, 1, 0]], dtype=torch.int64
-        )
+        durations = torch.tensor([[0, 3, 0, 7, 0, 2, 0, 12, 0, 5, 0, 1, 0]], dtype=torch.int64)
         total = durations.sum().item()  # 30
 
         x_len = durations.shape[1]
@@ -111,9 +109,7 @@ class TestDurationToGeneratePath:
     def test_m1_npy_to_generate_path_pipeline(self, tmp_path):
         """Full pipeline: M1 .npy output -> torch.from_numpy -> generate_path."""
         # M1出力のシミュレーション
-        duration_npy = np.array(
-            [0, 10, 0, 5, 0, 15, 0, 8, 0, 2, 0], dtype=np.int64
-        )
+        duration_npy = np.array([0, 10, 0, 5, 0, 15, 0, 8, 0, 2, 0], dtype=np.int64)
         npy_path = tmp_path / "test.npy"
         np.save(npy_path, duration_npy)
 

@@ -96,9 +96,7 @@ def _is_compiled(module):
 def _apply_compile(model, compile_model, compile_mode="default"):
     """Replicate the compile logic from matcha/train.py."""
     if compile_model:
-        model.decoder.estimator = torch.compile(
-            model.decoder.estimator, mode=compile_mode
-        )
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
     return model
 
 
@@ -110,27 +108,21 @@ class TestSelectiveCompile:
         """compile_model=true should compile decoder.estimator."""
         model = _build_model()
         _apply_compile(model, compile_model=True)
-        assert _is_compiled(model.decoder.estimator), (
-            "decoder.estimator should be compiled when compile_model=true"
-        )
+        assert _is_compiled(model.decoder.estimator), "decoder.estimator should be compiled when compile_model=true"
 
     @pytest.mark.slow
     def test_compile_true_encoder_is_not_compiled(self):
         """compile_model=true should NOT compile the encoder."""
         model = _build_model()
         _apply_compile(model, compile_model=True)
-        assert not _is_compiled(model.encoder), (
-            "encoder should NOT be compiled (einops causes graph breaks)"
-        )
+        assert not _is_compiled(model.encoder), "encoder should NOT be compiled (einops causes graph breaks)"
 
     @pytest.mark.slow
     def test_compile_false_nothing_compiled(self):
         """compile_model=false should leave all modules uncompiled."""
         model = _build_model()
         _apply_compile(model, compile_model=False)
-        assert not _is_compiled(model.encoder), (
-            "encoder should not be compiled when compile_model=false"
-        )
+        assert not _is_compiled(model.encoder), "encoder should not be compiled when compile_model=false"
         assert not _is_compiled(model.decoder.estimator), (
             "decoder.estimator should not be compiled when compile_model=false"
         )
@@ -186,9 +178,7 @@ class TestCompiledDecoderForward:
         with torch.no_grad():
             out = compiled_decoder(x, mask, mu, t)
 
-        assert out.shape == (1, n_feats, 20), (
-            f"Expected output shape (1, {n_feats}, 20), got {out.shape}"
-        )
+        assert out.shape == (1, n_feats, 20), f"Expected output shape (1, {n_feats}, 20), got {out.shape}"
         assert torch.isfinite(out).all(), "Output contains non-finite values"
 
     def test_compiled_decoder_matches_uncompiled(self):
@@ -206,9 +196,7 @@ class TestCompiledDecoderForward:
             out_compiled = compiled_decoder(x, mask, mu, t)
             out_eager = decoder(x, mask, mu, t)
 
-        assert torch.allclose(out_compiled, out_eager, atol=1e-6), (
-            "Compiled and uncompiled decoder outputs differ"
-        )
+        assert torch.allclose(out_compiled, out_eager, atol=1e-6), "Compiled and uncompiled decoder outputs differ"
 
     @pytest.mark.slow
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -230,7 +218,5 @@ class TestCompiledDecoderForward:
         with torch.no_grad():
             out = compiled_decoder(x, mask, mu, t)
 
-        assert out.shape == (1, n_feats, 20), (
-            f"Expected output shape (1, {n_feats}, 20), got {out.shape}"
-        )
+        assert out.shape == (1, n_feats, 20), f"Expected output shape (1, {n_feats}, 20), got {out.shape}"
         assert torch.isfinite(out).all(), "Output contains non-finite values"

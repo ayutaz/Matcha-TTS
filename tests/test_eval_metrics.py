@@ -1,4 +1,5 @@
 """Tests for M5 evaluation metric scripts."""
+
 import json
 import sys
 from pathlib import Path
@@ -141,10 +142,7 @@ class TestPrepareABTest:
     def test_main_missing_dir(self):
         from prepare_ab_test import main
 
-        assert (
-            main(["--model-a-dir", "/nonexist", "--model-b-dir", "/nonexist", "--output-dir", "/tmp/out"])
-            == 1
-        )
+        assert main(["--model-a-dir", "/nonexist", "--model-b-dir", "/nonexist", "--output-dir", "/tmp/out"]) == 1
 
 
 class TestAnalyzeABTest:

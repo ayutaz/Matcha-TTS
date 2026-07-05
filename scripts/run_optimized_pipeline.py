@@ -113,6 +113,7 @@ def katakana_to_hiragana(text: str) -> str:
 def _text_to_hiragana_worker(text: str) -> tuple[str, str]:
     """Worker: convert a single text to hiragana. Returns (text, hiragana)."""
     import pyopenjtalk
+
     kana = pyopenjtalk.g2p(text, kana=True)
     kana = _PUNCT_RE.sub("", kana)
     return text, katakana_to_hiragana(kana)
@@ -123,6 +124,7 @@ def text_to_hiragana(text: str) -> str:
     if text in _HIRAGANA_CACHE:
         return _HIRAGANA_CACHE[text]
     import pyopenjtalk
+
     kana = pyopenjtalk.g2p(text, kana=True)
     kana = _PUNCT_RE.sub("", kana)
     result = katakana_to_hiragana(kana)
@@ -161,12 +163,8 @@ def build_text_cache(texts: list[str], num_workers: int) -> dict[str, str]:
                 errors += 1
     else:
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(_text_to_hiragana_worker, text): text
-                for text in unique_texts
-            }
-            for future in tqdm(as_completed(futures), total=len(futures),
-                               desc="Text cache", unit="texts"):
+            futures = {executor.submit(_text_to_hiragana_worker, text): text for text in unique_texts}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Text cache", unit="texts"):
                 try:
                     text, hiragana = future.result()
                     cache[text] = hiragana
@@ -197,8 +195,7 @@ def resample_wav(input_path: str, output_path: str):
     sf.write(output_path, data, JULIUS_SR, subtype="PCM_16")
 
 
-def prepare_single(wav_path: str, text: str, output_dir: Path,
-                    hiragana_cache: dict[str, str]) -> tuple[str, bool, str]:
+def prepare_single(wav_path: str, text: str, output_dir: Path, hiragana_cache: dict[str, str]) -> tuple[str, bool, str]:
     """Prepare one file: resample + hiragana text.
 
     Uses the pre-computed hiragana_cache (T1-3) to avoid redundant g2p calls.
@@ -267,7 +264,10 @@ def run_julius_alignment(wav_dir: Path, output_dir: Path, num_workers: int = 16)
 
     log.info(
         "Julius alignment: %d matched pairs, %d already done, %d to process (workers=%d)",
-        len(matched), len(already_done), len(todo), num_workers,
+        len(matched),
+        len(already_done),
+        len(todo),
+        num_workers,
     )
 
     if not todo:
@@ -275,18 +275,13 @@ def run_julius_alignment(wav_dir: Path, output_dir: Path, num_workers: int = 16)
         return 0
 
     # Build task tuples for _align_single(name, wav_path, txt_path, segkit_dir, output_dir, timeout)
-    tasks = [
-        (name, str(wav_files[name]), str(txt_files[name]),
-         str(segkit_dir), str(output_dir), 300)
-        for name in todo
-    ]
+    tasks = [(name, str(wav_files[name]), str(txt_files[name]), str(segkit_dir), str(output_dir), 300) for name in todo]
 
     success = 0
     errors = []
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(_align_single, task): task[0] for task in tasks}
-        for future in tqdm(as_completed(futures), total=len(futures),
-                           desc="Julius alignment", unit="files"):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Julius alignment", unit="files"):
             name = futures[future]
             try:
                 result_name, error = future.result()
@@ -332,57 +327,86 @@ def main():
     parser = argparse.ArgumentParser(
         description="Optimized Julius alignment pipeline with timing and unified precompute"
     )
-    parser.add_argument("--filelist", type=str, nargs="+", required=True,
-                        help="One or more filelist paths (format: wav_path|speaker_id|text)")
-    parser.add_argument("--output-dir", type=str, default="data/julius_work",
-                        help="Working directory for Julius intermediate files")
-    parser.add_argument("--pt-output-dir", type=str, default="data/jvs_precomputed_aligned",
-                        help="Output directory for final .pt files")
-    parser.add_argument("--mel-mean", type=float, default=-6.550095,
-                        help="Mel normalization mean (default: JVS trimmed)")
-    parser.add_argument("--mel-std", type=float, default=2.383771,
-                        help="Mel normalization std (default: JVS trimmed)")
-    parser.add_argument("--num-workers", type=int, default=16,
-                        help="Number of parallel workers")
+    parser.add_argument(
+        "--filelist",
+        type=str,
+        nargs="+",
+        required=True,
+        help="One or more filelist paths (format: wav_path|speaker_id|text)",
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default="data/julius_work", help="Working directory for Julius intermediate files"
+    )
+    parser.add_argument(
+        "--pt-output-dir", type=str, default="data/jvs_precomputed_aligned", help="Output directory for final .pt files"
+    )
+    parser.add_argument(
+        "--mel-mean", type=float, default=-6.550095, help="Mel normalization mean (default: JVS trimmed)"
+    )
+    parser.add_argument("--mel-std", type=float, default=2.383771, help="Mel normalization std (default: JVS trimmed)")
+    parser.add_argument("--num-workers", type=int, default=16, help="Number of parallel workers")
 
     # Step skip flags
-    parser.add_argument("--skip-prepare", action="store_true",
-                        help="Skip Step 1 (resample + hiragana)")
-    parser.add_argument("--skip-julius", action="store_true",
-                        help="Skip Step 2 (Julius alignment)")
-    parser.add_argument("--skip-convert", action="store_true",
-                        help="Skip Step 3 (duration conversion). "
-                             "When using unified precompute (default), Step 3 is "
-                             "merged into Step 4 and this flag has no effect.")
-    parser.add_argument("--skip-embed", action="store_true",
-                        help="Skip Step 4 (.pt file generation)")
+    parser.add_argument("--skip-prepare", action="store_true", help="Skip Step 1 (resample + hiragana)")
+    parser.add_argument("--skip-julius", action="store_true", help="Skip Step 2 (Julius alignment)")
+    parser.add_argument(
+        "--skip-convert",
+        action="store_true",
+        help="Skip Step 3 (duration conversion). "
+        "When using unified precompute (default), Step 3 is "
+        "merged into Step 4 and this flag has no effect.",
+    )
+    parser.add_argument("--skip-embed", action="store_true", help="Skip Step 4 (.pt file generation)")
 
     # T2-2: Unified vs legacy precompute
-    parser.add_argument("--unified-precompute", action="store_true", default=True,
-                        help="Use unified precompute_with_alignment.py (default: True). "
-                             "Merges Step 3 (duration conversion) and Step 4 (.pt generation) "
-                             "into a single step that reads .lab files directly.")
-    parser.add_argument("--legacy-precompute", action="store_true",
-                        help="Use legacy separate pipeline: Step 3 (convert_julius_to_durations) "
-                             "+ Step 4 (precompute_dataset.py --durations-dir)")
-    parser.add_argument("--precompute-legacy-path", action="store_true",
-                        help="Force precompute_with_alignment.py to use its internal legacy "
-                             "ProcessPoolExecutor path (Phase 1-). Default uses the fast path.")
-    parser.add_argument("--precompute-device", type=str, default="cpu",
-                        choices=["cpu", "cuda", "auto"],
-                        help="Device for mel computation in unified fast path "
-                             "(default: cpu — Phase 5 benchmark showed CPU is faster than GPU)")
-    parser.add_argument("--precompute-batch-size", type=int, default=32,
-                        help="Batch size for unified fast precompute (default: 32)")
-    parser.add_argument("--precompute-io-workers", type=int, default=16,
-                        help="IO workers for unified fast precompute (default: 16)")
+    parser.add_argument(
+        "--unified-precompute",
+        action="store_true",
+        default=True,
+        help="Use unified precompute_with_alignment.py (default: True). "
+        "Merges Step 3 (duration conversion) and Step 4 (.pt generation) "
+        "into a single step that reads .lab files directly.",
+    )
+    parser.add_argument(
+        "--legacy-precompute",
+        action="store_true",
+        help="Use legacy separate pipeline: Step 3 (convert_julius_to_durations) "
+        "+ Step 4 (precompute_dataset.py --durations-dir)",
+    )
+    parser.add_argument(
+        "--precompute-legacy-path",
+        action="store_true",
+        help="Force precompute_with_alignment.py to use its internal legacy "
+        "ProcessPoolExecutor path (Phase 1-). Default uses the fast path.",
+    )
+    parser.add_argument(
+        "--precompute-device",
+        type=str,
+        default="cpu",
+        choices=["cpu", "cuda", "auto"],
+        help="Device for mel computation in unified fast path "
+        "(default: cpu — Phase 5 benchmark showed CPU is faster than GPU)",
+    )
+    parser.add_argument(
+        "--precompute-batch-size", type=int, default=32, help="Batch size for unified fast precompute (default: 32)"
+    )
+    parser.add_argument(
+        "--precompute-io-workers", type=int, default=16, help="IO workers for unified fast precompute (default: 16)"
+    )
 
     # T2-3: /dev/shm option
-    parser.add_argument("--use-shm", action="store_true",
-                        help="Copy final .pt output to /dev/shm for fast I/O during training. "
-                             "Files are written to --pt-output-dir first, then copied.")
-    parser.add_argument("--shm-dir", type=str, default="/dev/shm/jvs_precomputed_aligned",
-                        help="Target directory under /dev/shm (default: /dev/shm/jvs_precomputed_aligned)")
+    parser.add_argument(
+        "--use-shm",
+        action="store_true",
+        help="Copy final .pt output to /dev/shm for fast I/O during training. "
+        "Files are written to --pt-output-dir first, then copied.",
+    )
+    parser.add_argument(
+        "--shm-dir",
+        type=str,
+        default="/dev/shm/jvs_precomputed_aligned",
+        help="Target directory under /dev/shm (default: /dev/shm/jvs_precomputed_aligned)",
+    )
 
     args = parser.parse_args()
 
@@ -429,8 +453,7 @@ def main():
             futures = {}
             for entry in all_entries:
                 wav_path, spk_str, text = entry
-                future = executor.submit(prepare_single, wav_path, text, wav_dir,
-                                          hiragana_cache)
+                future = executor.submit(prepare_single, wav_path, text, wav_dir, hiragana_cache)
                 futures[future] = wav_path
 
             for future in tqdm(as_completed(futures), total=len(futures), desc="Preparing"):
@@ -440,8 +463,9 @@ def main():
                 elif "skipped" in msg:
                     skipped += 1
 
-        log.info("Prepared: %d ok, %d skipped, %d errors",
-                 len(all_entries) - len(errors) - skipped, skipped, len(errors))
+        log.info(
+            "Prepared: %d ok, %d skipped, %d errors", len(all_entries) - len(errors) - skipped, skipped, len(errors)
+        )
         if errors:
             for e in errors[:5]:
                 log.warning("  %s", e)
@@ -465,29 +489,43 @@ def main():
         if not args.skip_embed:
             t0 = time.time()
             log.info("=== Step 3+4 (unified): Generating .pt files with durations from .lab ===")
-            for split, filelist in [("train", args.filelist[0]),
-                                     ("val", args.filelist[1] if len(args.filelist) > 1 else None)]:
+            for split, filelist in [
+                ("train", args.filelist[0]),
+                ("val", args.filelist[1] if len(args.filelist) > 1 else None),
+            ]:
                 if filelist is None:
                     continue
                 pt_out = Path(args.pt_output_dir) / split
                 pt_out.mkdir(parents=True, exist_ok=True)
                 cmd = [
-                    sys.executable, "scripts/precompute_with_alignment.py",
-                    "--filelist", filelist,
-                    "--lab-dir", str(wav_dir),
-                    "--output-dir", str(pt_out),
-                    "--mel-mean", str(args.mel_mean),
-                    "--mel-std", str(args.mel_std),
-                    "--num-workers", str(args.num_workers),
+                    sys.executable,
+                    "scripts/precompute_with_alignment.py",
+                    "--filelist",
+                    filelist,
+                    "--lab-dir",
+                    str(wav_dir),
+                    "--output-dir",
+                    str(pt_out),
+                    "--mel-mean",
+                    str(args.mel_mean),
+                    "--mel-std",
+                    str(args.mel_std),
+                    "--num-workers",
+                    str(args.num_workers),
                 ]
                 if args.precompute_legacy_path:
                     cmd.append("--legacy")
                 else:
-                    cmd.extend([
-                        "--device", args.precompute_device,
-                        "--batch-size", str(args.precompute_batch_size),
-                        "--io-workers", str(args.precompute_io_workers),
-                    ])
+                    cmd.extend(
+                        [
+                            "--device",
+                            args.precompute_device,
+                            "--batch-size",
+                            str(args.precompute_batch_size),
+                            "--io-workers",
+                            str(args.precompute_io_workers),
+                        ]
+                    )
                 log.info("Running: %s", " ".join(cmd))
                 subprocess.run(cmd, check=True)
             timings["Step 3+4: Unified precompute"] = time.time() - t0
@@ -553,20 +591,29 @@ def main():
         if not args.skip_embed:
             t0 = time.time()
             log.info("=== Step 4: Re-generating .pt files with durations ===")
-            for split, filelist in [("train", args.filelist[0]),
-                                     ("val", args.filelist[1] if len(args.filelist) > 1 else None)]:
+            for split, filelist in [
+                ("train", args.filelist[0]),
+                ("val", args.filelist[1] if len(args.filelist) > 1 else None),
+            ]:
                 if filelist is None:
                     continue
                 pt_out = Path(args.pt_output_dir) / split
                 pt_out.mkdir(parents=True, exist_ok=True)
                 cmd = [
-                    sys.executable, "scripts/precompute_dataset.py",
-                    "--filelist", filelist,
-                    "--output-dir", str(pt_out),
-                    "--mel-mean", str(args.mel_mean),
-                    "--mel-std", str(args.mel_std),
-                    "--durations-dir", str(dur_dir),
-                    "--num-workers", str(args.num_workers),
+                    sys.executable,
+                    "scripts/precompute_dataset.py",
+                    "--filelist",
+                    filelist,
+                    "--output-dir",
+                    str(pt_out),
+                    "--mel-mean",
+                    str(args.mel_mean),
+                    "--mel-std",
+                    str(args.mel_std),
+                    "--durations-dir",
+                    str(dur_dir),
+                    "--num-workers",
+                    str(args.num_workers),
                 ]
                 log.info("Running: %s", " ".join(cmd))
                 subprocess.run(cmd, check=True)
