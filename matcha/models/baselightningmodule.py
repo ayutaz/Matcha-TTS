@@ -17,6 +17,13 @@ from matcha.utils.utils import plot_tensor
 log = utils.get_pylogger(__name__)
 
 
+def _cfg_get(cfg, key, default=None):
+    """Read a key from a dict / DictConfig / namespace-like scheduler config."""
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
 def build_warmup_cosine_scheduler(optimizer, scheduler_cfg):
     """Build a SequentialLR with linear warmup followed by cosine decay.
 
@@ -68,34 +75,48 @@ class BaseLightningClass(LightningModule, ABC):
 
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
-        if getattr(self.hparams, "scheduler", None) is not None:
-            scheduler_cfg = self.hparams.scheduler
-            # Check if this is a warmup_cosine_safe config (dict-based, no _target_)
-            scheduler_type = getattr(scheduler_cfg, "type", None) if not callable(scheduler_cfg) else None
-            if scheduler_type is None and isinstance(scheduler_cfg, dict):
-                scheduler_type = scheduler_cfg.get("type", None)
+        scheduler_cfg = getattr(self.hparams, "scheduler", None)
+        if scheduler_cfg is None:
+            return {"optimizer": optimizer}
 
-            if scheduler_type == "warmup_cosine_safe":
-                scheduler = build_warmup_cosine_scheduler(optimizer, scheduler_cfg)
-                return {
-                    "optimizer": optimizer,
-                    "lr_scheduler": {
-                        "scheduler": scheduler,
-                        "interval": "step",
-                    },
-                }
-            else:
-                # Original Hydra _partial_ path
-                scheduler = scheduler_cfg(optimizer=optimizer)
-                return {
-                    "optimizer": optimizer,
-                    "lr_scheduler": {
-                        "scheduler": scheduler,
-                        "interval": "epoch",
-                    },
-                }
+        # Directly callable Hydra _partial_ (e.g. linear_warmup_cosine.yaml)
+        if callable(scheduler_cfg):
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler_cfg(optimizer=optimizer),
+                    "interval": "epoch",
+                },
+            }
 
-        return {"optimizer": optimizer}
+        # Dict-based config without _target_ (warmup_cosine_safe.yaml)
+        if _cfg_get(scheduler_cfg, "type") == "warmup_cosine_safe":
+            scheduler = build_warmup_cosine_scheduler(optimizer, scheduler_cfg)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                },
+            }
+
+        # Nested form: scheduler (_partial_) + lightning_args (e.g. warmup_cosine.yaml)
+        inner = _cfg_get(scheduler_cfg, "scheduler")
+        if callable(inner):
+            lightning_args = _cfg_get(scheduler_cfg, "lightning_args") or {}
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": inner(optimizer=optimizer),
+                    "interval": _cfg_get(lightning_args, "interval", "epoch"),
+                    "frequency": _cfg_get(lightning_args, "frequency", 1),
+                },
+            }
+
+        raise ValueError(
+            "Unsupported scheduler config: expected a callable partial, type=warmup_cosine_safe, "
+            f"or a nested scheduler/lightning_args form, got: {scheduler_cfg!r}"
+        )
 
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]

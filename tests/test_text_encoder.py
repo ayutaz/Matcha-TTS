@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -417,3 +418,52 @@ class TestBlankEmbeddingZeroInit:
         phoneme = encoder.emb.weight.data[1]
         l2 = torch.norm(blank - phoneme)
         assert l2 > 0.0
+
+
+class TestRotaryCacheRebuild:
+    """RoPEキャッシュがmax_seq_len超過時に正しく再構築されること"""
+
+    def _make_rope(self, max_seq_len=16):
+        from matcha.models.components.text_encoder import RotaryPositionalEmbeddings
+
+        return RotaryPositionalEmbeddings(d=32, max_seq_len=max_seq_len)
+
+    def test_forward_beyond_max_seq_len_rebuilds_cache(self):
+        """seq_len > max_seq_lenでキャッシュが拡張され、出力shapeが保たれる"""
+        rope = self._make_rope(max_seq_len=16)
+        x = torch.randn(2, 2, 24, 32)  # [b, h, t, d], t=24 > 16
+        out = rope(x)
+        assert out.shape == x.shape
+        assert rope.max_seq_len == 24
+        assert rope.cos_cached.shape[0] == 24
+
+    def test_rebuild_keeps_buffer_registration(self):
+        """再構築後もcos/sinが非persistentバッファのまま維持される"""
+        rope = self._make_rope(max_seq_len=16)
+        rope(torch.randn(1, 2, 32, 32))
+        buffers = dict(rope.named_buffers())
+        assert "cos_cached" in buffers
+        assert "sin_cached" in buffers
+        # 非persistent: state_dictには含まれない
+        assert "cos_cached" not in rope.state_dict()
+        assert "sin_cached" not in rope.state_dict()
+
+    def test_rebuild_preserves_values(self):
+        """再構築後の先頭max_seq_len分は元のキャッシュと一致する"""
+        rope = self._make_rope(max_seq_len=16)
+        old_cos = rope.cos_cached.clone()
+        old_sin = rope.sin_cached.clone()
+        rope(torch.randn(1, 2, 24, 32))
+        assert torch.allclose(rope.cos_cached[:16], old_cos)
+        assert torch.allclose(rope.sin_cached[:16], old_sin)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_rebuild_on_input_device(self):
+        """再構築されたキャッシュが入力と同じdeviceに配置される"""
+        from matcha.models.components.text_encoder import RotaryPositionalEmbeddings
+
+        rope = RotaryPositionalEmbeddings(d=32, max_seq_len=16).cuda()
+        x = torch.randn(2, 2, 24, 32, device="cuda")
+        out = rope(x)
+        assert rope.cos_cached.device.type == "cuda"
+        assert out.device.type == "cuda"

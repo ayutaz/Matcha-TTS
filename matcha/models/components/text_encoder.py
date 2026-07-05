@@ -158,15 +158,15 @@ class RotaryPositionalEmbeddings(nn.Module):
         # Pre-allocate cache at init time
         self._build_cache(max_seq_len)
 
-    def _build_cache(self, seq_len: int):
+    def _build_cache(self, seq_len: int, device: torch.device | None = None):
         r"""
-        Build and register $\cos$ and $\sin$ cache buffers.
+        Build $\cos$ and $\sin$ cache buffers on the given device.
         """
         # $\Theta = {\theta_i = 10000^{-\frac{2(i-1)}{d}}, i \in [1, 2, ..., \frac{d}{2}]}$
-        theta = 1.0 / (self.base ** (torch.arange(0, self.d, 2).float() / self.d))
+        theta = 1.0 / (self.base ** (torch.arange(0, self.d, 2, device=device).float() / self.d))
 
         # Create position indexes `[0, 1, ..., seq_len - 1]`
-        seq_idx = torch.arange(seq_len).float()
+        seq_idx = torch.arange(seq_len, device=device).float()
 
         # Calculate the product of position index and $\theta_i$
         idx_theta = torch.einsum("n,d->nd", seq_idx, theta)
@@ -175,9 +175,17 @@ class RotaryPositionalEmbeddings(nn.Module):
         # $[m \theta_0, m \theta_1, ..., m \theta_{\frac{d}{2}}, m \theta_0, m \theta_1, ..., m \theta_{\frac{d}{2}}]$
         idx_theta2 = torch.cat([idx_theta, idx_theta], dim=1)
 
-        # Register as non-persistent buffers (not saved in state_dict, but move with .to(device))
-        self.register_buffer("cos_cached", idx_theta2.cos()[:, None, None, :], persistent=False)
-        self.register_buffer("sin_cached", idx_theta2.sin()[:, None, None, :], persistent=False)
+        cos_cached = idx_theta2.cos()[:, None, None, :]
+        sin_cached = idx_theta2.sin()[:, None, None, :]
+        if hasattr(self, "cos_cached"):
+            # Forward-time rebuild: plain assignment updates the existing
+            # buffer entries instead of re-registering them
+            self.cos_cached = cos_cached
+            self.sin_cached = sin_cached
+        else:
+            # Register as non-persistent buffers (not saved in state_dict, but move with .to(device))
+            self.register_buffer("cos_cached", cos_cached, persistent=False)
+            self.register_buffer("sin_cached", sin_cached, persistent=False)
 
     def _neg_half(self, x: torch.Tensor):
         # $\frac{d}{2}$
@@ -195,7 +203,7 @@ class RotaryPositionalEmbeddings(nn.Module):
         seq_len = x.shape[0]
 
         if seq_len > self.max_seq_len:
-            self._build_cache(seq_len)
+            self._build_cache(seq_len, device=x.device)
             self.max_seq_len = seq_len
 
         # Split the features, we can choose to apply rotary embeddings only to a partial set of features.

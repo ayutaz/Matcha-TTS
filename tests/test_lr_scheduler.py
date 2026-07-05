@@ -166,34 +166,39 @@ class TestWarmupCosineScheduler:
             )
 
 
+def _make_dummy_module():
+    """Create a minimal concrete BaseLightningClass subclass instance."""
+    from matcha.models.baselightningmodule import BaseLightningClass
+
+    class DummyModule(BaseLightningClass):
+        def __init__(self):
+            super().__init__()
+            self._dummy = torch.nn.Linear(1, 1)
+            self.save_hyperparameters(
+                {
+                    "optimizer": None,
+                    "scheduler": None,
+                },
+                logger=False,
+            )
+
+        def forward(self, x):
+            return x
+
+    module = DummyModule()
+    module.hparams.optimizer = lambda params: torch.optim.AdamW(params, lr=1e-4, weight_decay=0.0)
+    return module
+
+
 class TestConfigureOptimizersIntegration:
     """Verify that configure_optimizers correctly builds the scheduler."""
 
     def test_returns_scheduler_dict_for_warmup_cosine_safe(self):
         """configure_optimizers should return an lr_scheduler dict when
         scheduler config has type=warmup_cosine_safe."""
-        from matcha.models.baselightningmodule import BaseLightningClass
-
-        # Create a minimal concrete subclass
-        class DummyModule(BaseLightningClass):
-            def __init__(self):
-                super().__init__()
-                self._dummy = torch.nn.Linear(1, 1)
-                self.save_hyperparameters(
-                    {
-                        "optimizer": None,
-                        "scheduler": None,
-                    },
-                    logger=False,
-                )
-
-            def forward(self, x):
-                return x
-
-        module = DummyModule()
+        module = _make_dummy_module()
 
         # Patch hparams to match what Hydra would produce
-        optimizer_partial = lambda params: torch.optim.AdamW(params, lr=1e-4, weight_decay=0.0)
         scheduler_cfg = SimpleNamespace(
             type="warmup_cosine_safe",
             warmup_steps=500,
@@ -201,7 +206,6 @@ class TestConfigureOptimizersIntegration:
             T_max=20000,
             eta_min=5e-5,
         )
-        module.hparams.optimizer = optimizer_partial
         module.hparams.scheduler = scheduler_cfg
 
         result = module.configure_optimizers()
@@ -218,31 +222,70 @@ class TestConfigureOptimizersIntegration:
     def test_returns_no_scheduler_when_none(self):
         """configure_optimizers should return only optimizer when scheduler is
         None."""
-        from matcha.models.baselightningmodule import BaseLightningClass
-
-        class DummyModule(BaseLightningClass):
-            def __init__(self):
-                super().__init__()
-                self._dummy = torch.nn.Linear(1, 1)
-                self.save_hyperparameters(
-                    {
-                        "optimizer": None,
-                        "scheduler": None,
-                    },
-                    logger=False,
-                )
-
-            def forward(self, x):
-                return x
-
-        module = DummyModule()
-        optimizer_partial = lambda params: torch.optim.AdamW(params, lr=1e-4, weight_decay=0.0)
-        module.hparams.optimizer = optimizer_partial
+        module = _make_dummy_module()
 
         result = module.configure_optimizers()
 
         assert "optimizer" in result
         assert "lr_scheduler" not in result
+
+    def test_callable_partial_scheduler(self):
+        """A directly callable Hydra _partial_ config (linear_warmup_cosine.yaml
+        form) should be instantiated with interval=epoch."""
+        module = _make_dummy_module()
+        module.hparams.scheduler = lambda optimizer: torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=100, eta_min=1e-6
+        )
+
+        result = module.configure_optimizers()
+
+        lr_sched = result["lr_scheduler"]
+        assert lr_sched["interval"] == "epoch"
+        assert isinstance(lr_sched["scheduler"], torch.optim.lr_scheduler.CosineAnnealingLR)
+
+    def test_nested_scheduler_with_lightning_args(self):
+        """The nested form (scheduler: _partial_ + lightning_args:) used by
+        warmup_cosine.yaml should be instantiated with interval/frequency
+        taken from lightning_args instead of hard-coded values."""
+        module = _make_dummy_module()
+        module.hparams.scheduler = SimpleNamespace(
+            scheduler=lambda optimizer: torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-6),
+            lightning_args=SimpleNamespace(interval="step", frequency=2),
+        )
+
+        result = module.configure_optimizers()
+
+        lr_sched = result["lr_scheduler"]
+        assert isinstance(lr_sched["scheduler"], torch.optim.lr_scheduler.CosineAnnealingLR)
+        assert lr_sched["interval"] == "step"
+        assert lr_sched["frequency"] == 2
+
+    def test_nested_scheduler_as_plain_dict(self):
+        """The nested form should also work when the config arrives as a plain
+        dict (e.g. loaded YAML) rather than an OmegaConf/namespace object."""
+        module = _make_dummy_module()
+        module.hparams.scheduler = {
+            "scheduler": lambda optimizer: torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=100, eta_min=1e-6
+            ),
+            "lightning_args": {"interval": "epoch", "frequency": 1},
+        }
+
+        result = module.configure_optimizers()
+
+        lr_sched = result["lr_scheduler"]
+        assert isinstance(lr_sched["scheduler"], torch.optim.lr_scheduler.CosineAnnealingLR)
+        assert lr_sched["interval"] == "epoch"
+        assert lr_sched["frequency"] == 1
+
+    def test_unsupported_scheduler_config_raises(self):
+        """A config that is neither callable, warmup_cosine_safe, nor the
+        nested form should raise a clear ValueError."""
+        module = _make_dummy_module()
+        module.hparams.scheduler = SimpleNamespace(foo="bar")
+
+        with pytest.raises(ValueError, match="Unsupported scheduler config"):
+            module.configure_optimizers()
 
 
 class TestCustomParameters:
