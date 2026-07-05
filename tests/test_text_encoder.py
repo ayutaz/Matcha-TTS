@@ -1,5 +1,6 @@
 """Tests for the TextEncoder component."""
 
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -467,3 +468,191 @@ class TestRotaryCacheRebuild:
         out = rope(x)
         assert rope.cos_cached.device.type == "cuda"
         assert out.device.type == "cuda"
+
+
+class TestSDPAPaddingInvariance:
+    """SDPA attention: padded batch entries produce the same valid-position outputs as unpadded runs."""
+
+    MAX_LEN = 12
+    SHORT_LEN = MAX_LEN - 4
+
+    def _run_padded_and_unpadded(self):
+        """Run the same short item once inside a padded B=2 batch and once alone (B=1, no padding)."""
+        torch.manual_seed(0)
+        encoder = _build_encoder()
+        encoder.eval()
+
+        torch.manual_seed(1)
+        x = torch.randint(1, 178, (2, self.MAX_LEN))
+        x[1, self.SHORT_LEN :] = 0  # padded region of the short item
+        x_lengths = torch.tensor([self.MAX_LEN, self.SHORT_LEN])
+
+        with torch.no_grad():
+            padded = encoder(x, x_lengths)
+            unpadded = encoder(x[1:2, : self.SHORT_LEN], torch.tensor([self.SHORT_LEN]))
+        return padded, unpadded
+
+    def test_mu_matches_unpadded_run_at_valid_positions(self):
+        (mu_p, _logw_p, _mask_p), (mu_u, _logw_u, _mask_u) = self._run_padded_and_unpadded()
+        assert torch.allclose(mu_p[1, :, : self.SHORT_LEN], mu_u[0], atol=1e-5)
+
+    def test_logw_matches_unpadded_run_at_valid_positions(self):
+        (_mu_p, logw_p, _mask_p), (_mu_u, logw_u, _mask_u) = self._run_padded_and_unpadded()
+        assert torch.allclose(logw_p[1, :, : self.SHORT_LEN], logw_u[0], atol=1e-5)
+
+    def test_no_nan_in_padded_outputs(self):
+        """Fully-masked SDPA rows (padded query positions) must not inject NaN into mu/logw."""
+        (mu_p, logw_p, _mask_p), _ = self._run_padded_and_unpadded()
+        assert not torch.isnan(mu_p).any()
+        assert not torch.isnan(logw_p).any()
+
+
+class TestSDPANumericalEquivalence:
+    """MultiHeadAttention SDPA path matches a hand-rolled attention reference."""
+
+    CHANNELS = 64
+    N_HEADS = 2
+    BATCH = 2
+    SEQ_LEN = 9
+
+    def _build_mha(self, p_dropout=0.0):
+        from matcha.models.components.text_encoder import MultiHeadAttention
+
+        torch.manual_seed(0)
+        mha = MultiHeadAttention(
+            channels=self.CHANNELS,
+            out_channels=self.CHANNELS,
+            n_heads=self.N_HEADS,
+            p_dropout=p_dropout,
+        )
+        mha.eval()
+        return mha
+
+    def _make_input(self):
+        torch.manual_seed(1)
+        return torch.randn(self.BATCH, self.CHANNELS, self.SEQ_LEN)
+
+    @staticmethod
+    def _reference_attention(module, x, c, mask=None):
+        """Hand-rolled attention reusing the module's own submodules.
+
+        Mirrors MultiHeadAttention.attention: project via conv_q/k/v, reshape
+        to heads, apply the module's rotary embeddings, scaled masked softmax,
+        weighted sum over values, then conv_o.
+        """
+        q = module.conv_q(x)
+        k = module.conv_k(c)
+        v = module.conv_v(c)
+        b, d, t_s = k.shape
+        t_t = q.shape[2]
+        n_heads, k_channels = module.n_heads, module.k_channels
+
+        def to_heads(t):
+            # "b (h c) t -> b h t c"
+            return t.view(b, n_heads, k_channels, -1).transpose(2, 3)
+
+        query = module.query_rotary_pe(to_heads(q))
+        key = module.key_rotary_pe(to_heads(k))
+        value = to_heads(v)
+
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(k_channels)
+        if mask is not None:
+            # SDPA boolean masking: disallowed positions get -inf before softmax
+            scores = scores.masked_fill(mask == 0, float("-inf"))
+        p_attn = torch.softmax(scores, dim=-1)
+        output = torch.matmul(p_attn, value)
+        output = output.transpose(2, 3).reshape(b, d, t_t)
+        return module.conv_o(output)
+
+    def test_matches_reference_without_mask(self):
+        mha = self._build_mha()
+        x = self._make_input()
+        with torch.no_grad():
+            out_module = mha(x, x, attn_mask=None)
+            out_ref = self._reference_attention(mha, x, x, mask=None)
+        assert torch.allclose(out_module, out_ref, atol=1e-5)
+
+    def test_matches_reference_with_partial_mask(self):
+        mha = self._build_mha()
+        x = self._make_input()
+        # Key-side partial mask; every query row keeps at least one valid key
+        mask = torch.ones(self.BATCH, 1, self.SEQ_LEN, self.SEQ_LEN)
+        mask[1, :, :, self.SEQ_LEN - 3 :] = 0.0
+        with torch.no_grad():
+            out_module = mha(x, x, attn_mask=mask)
+            out_ref = self._reference_attention(mha, x, x, mask=mask)
+        assert torch.allclose(out_module, out_ref, atol=1e-5)
+
+    def test_attn_is_none_after_sdpa_path(self):
+        """SDPA path never materializes the attention matrix (self.attn stays None)."""
+        mha = self._build_mha()
+        x = self._make_input()
+        with torch.no_grad():
+            mha(x, x, attn_mask=None)
+        assert mha.attn is None
+
+    def test_eval_mode_is_deterministic(self):
+        """dropout_p=0 in eval mode: two forward passes give identical outputs."""
+        mha = self._build_mha(p_dropout=0.1)
+        x = self._make_input()
+        with torch.no_grad():
+            out_1 = mha(x, x, attn_mask=None)
+            out_2 = mha(x, x, attn_mask=None)
+        assert torch.equal(out_1, out_2)
+
+
+class TestLayerNormFP32:
+    """LayerNorm: fp32 accumulation for fp16 inputs and channel-dim (dim=1) semantics."""
+
+    CHANNELS = 8
+
+    def _make_layer_norm(self):
+        from matcha.models.components.text_encoder import LayerNorm
+
+        return LayerNorm(channels=self.CHANNELS)
+
+    def _make_large_fp16_input(self):
+        """Large-magnitude fp16 input where naive fp16 statistics lose precision."""
+        torch.manual_seed(0)
+        x32 = 300.0 + 0.5 * torch.randn(2, self.CHANNELS, 6)
+        return x32.to(torch.float16)
+
+    def test_fp16_input_output_is_finite(self):
+        ln = self._make_layer_norm()
+        out = ln(self._make_large_fp16_input())
+        assert torch.isfinite(out).all()
+
+    def test_fp16_matches_pure_float32_computation(self):
+        """fp16 input normalized via fp32 accumulation matches the same math done fully in fp32."""
+        ln = self._make_layer_norm()
+        x16 = self._make_large_fp16_input()
+        x32 = x16.float()
+
+        with torch.no_grad():
+            out_fp16_path = ln(x16)
+            # Reference: identical computation carried out entirely in float32
+            mean = x32.mean(dim=1, keepdim=True)
+            variance = ((x32 - mean) ** 2).mean(dim=1, keepdim=True)
+            normalized = (x32 - mean) * torch.rsqrt(variance + ln.eps)
+            out_ref = normalized * ln.gamma.view(1, -1, 1) + ln.beta.view(1, -1, 1)
+
+        assert torch.allclose(out_fp16_path.float(), out_ref, atol=1e-2)
+
+    def test_dim1_mean_is_zero(self):
+        """Normalization runs over dim=1 (channels), not the last dim: per-(batch, time) mean ~ 0."""
+        ln = self._make_layer_norm()
+        torch.manual_seed(1)
+        x = torch.randn(3, self.CHANNELS, 5)
+        with torch.no_grad():
+            out = ln(x)  # default gamma=1, beta=0
+        assert torch.allclose(out.mean(dim=1), torch.zeros(3, 5), atol=1e-5)
+
+    def test_dim1_std_is_one(self):
+        """Per-(batch, time) biased std over dim=1 ~ 1 (up to eps in the denominator)."""
+        ln = self._make_layer_norm()
+        torch.manual_seed(1)
+        x = torch.randn(3, self.CHANNELS, 5)
+        with torch.no_grad():
+            out = ln(x)
+        std = out.var(dim=1, unbiased=False).sqrt()
+        assert torch.allclose(std, torch.ones(3, 5), atol=1e-2)

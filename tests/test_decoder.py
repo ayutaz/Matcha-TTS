@@ -1,7 +1,10 @@
+import math
+from copy import deepcopy
+
 import pytest
 import torch
 
-from matcha.models.components.decoder import Decoder
+from matcha.models.components.decoder import Decoder, SinusoidalPosEmb
 
 
 @pytest.fixture()
@@ -111,4 +114,197 @@ class TestDecoderForward:
         x, mu, mask, t = sample_inputs
         with torch.no_grad():
             output = decoder(x, mask, mu, t, spks=None, cond=None)
+        assert output.shape == (2, 80, 20)
+
+
+@pytest.fixture()
+def parity_pair(decoder_config):
+    """Two identically-weighted small Decoders: plain and gradient-checkpointed.
+
+    dropout=0.0 removes the only source of randomness in train() mode so
+    outputs and gradients must match exactly between the two code paths.
+    """
+    config = dict(decoder_config, dropout=0.0)
+    torch.manual_seed(0)
+    base = Decoder(**config)
+    ckpt = Decoder(**config, use_gradient_checkpointing=True)
+    ckpt.load_state_dict(deepcopy(base.state_dict()))
+    base.train()
+    ckpt.train()
+    return base, ckpt
+
+
+@pytest.fixture()
+def parity_inputs():
+    """Deterministic inputs with a non-trivial padding mask."""
+    torch.manual_seed(42)
+    batch, mel_channels, length = 2, 40, 20
+    x = torch.randn(batch, mel_channels, length)
+    mu = torch.randn(batch, mel_channels, length)
+    mask = torch.ones(batch, 1, length)
+    mask[1, :, 16:] = 0.0  # exercise attention_mask handling in both paths
+    t = torch.rand(batch)
+    return x, mu, mask, t
+
+
+class TestGradientCheckpointingParity:
+    """Checkpointed forward must be numerically identical to the plain path.
+
+    This guards the positional-arg mapping (x, mask, None, None, t) onto
+    BasicTransformerBlock.forward(hidden_states, attention_mask,
+    encoder_hidden_states, encoder_attention_mask, timestep) used by
+    torch.utils.checkpoint in Decoder.forward.
+    """
+
+    def test_constructor_flag(self, decoder_config):
+        """use_gradient_checkpointing is stored from the constructor argument."""
+        assert Decoder(**decoder_config).use_gradient_checkpointing is False
+        assert Decoder(**decoder_config, use_gradient_checkpointing=True).use_gradient_checkpointing is True
+
+    def test_enable_gradient_checkpointing_flips_flag(self, decoder_config):
+        """enable_gradient_checkpointing() sets the flag on a plain Decoder."""
+        model = Decoder(**decoder_config)
+        assert model.use_gradient_checkpointing is False
+        model.enable_gradient_checkpointing()
+        assert model.use_gradient_checkpointing is True
+
+    def test_forward_outputs_match(self, parity_pair, parity_inputs):
+        """Train-mode outputs are identical with and without checkpointing."""
+        base, ckpt = parity_pair
+        x, mu, mask, t = parity_inputs
+        out_base = base(x, mask, mu, t)
+        out_ckpt = ckpt(x, mask, mu, t)
+        assert torch.allclose(out_base, out_ckpt, atol=1e-6)
+
+    def test_gradients_match(self, parity_pair, parity_inputs):
+        """Backward through the checkpointed path reproduces every gradient."""
+        base, ckpt = parity_pair
+        x, mu, mask, t = parity_inputs
+
+        x_base = x.clone().requires_grad_(True)
+        x_ckpt = x.clone().requires_grad_(True)
+
+        base(x_base, mask, mu, t).sum().backward()
+        ckpt(x_ckpt, mask, mu, t).sum().backward()
+
+        assert x_base.grad is not None and x_ckpt.grad is not None
+        assert torch.allclose(x_base.grad, x_ckpt.grad, atol=1e-6), "Input gradient mismatch"
+
+        ckpt_grads = dict(ckpt.named_parameters())
+        for name, param in base.named_parameters():
+            grad_base = param.grad
+            grad_ckpt = ckpt_grads[name].grad
+            assert (grad_base is None) == (grad_ckpt is None), f"Gradient presence mismatch for {name}"
+            if grad_base is not None:
+                assert torch.allclose(grad_base, grad_ckpt, atol=1e-6), f"Gradient mismatch for {name}"
+
+    def test_eval_inference_mode_bypasses_checkpointing(self, parity_pair, parity_inputs):
+        """In eval() mode checkpointing is skipped and inference_mode works."""
+        base, ckpt = parity_pair
+        base.eval()
+        ckpt.eval()
+        x, mu, mask, t = parity_inputs
+        with torch.inference_mode():
+            out_ckpt = ckpt(x, mask, mu, t)
+            out_base = base(x, mask, mu, t)
+        assert out_ckpt.shape == (2, 80, 20)
+        assert torch.allclose(out_base, out_ckpt, atol=1e-6)
+
+
+def _reference_sinusoidal_emb(t, dim, scale):
+    """Reference implementation of the original einops-based SinusoidalPosEmb."""
+    half_dim = dim // 2
+    emb = torch.exp(torch.arange(half_dim).float() * -(math.log(10000) / (half_dim - 1)))
+    arg = scale * t.unsqueeze(1) * emb.unsqueeze(0)
+    return torch.cat((arg.sin(), arg.cos()), dim=-1)
+
+
+class TestSinusoidalPosEmb:
+    """Value/edge-case tests for the register_buffer rewrite of SinusoidalPosEmb."""
+
+    def test_matches_reference_formula_default_scale(self):
+        """Default scale (1000) output matches the closed-form reference."""
+        dim = 64
+        module = SinusoidalPosEmb(dim)
+        t = torch.tensor([0.0, 1.0, 5.5, 999.0])
+        out = module(t)
+        expected = _reference_sinusoidal_emb(t, dim, scale=1000)
+        assert out.shape == (4, dim)
+        assert torch.allclose(out, expected, atol=1e-6)
+
+    @pytest.mark.parametrize("scale", [1, 250])
+    def test_custom_scale_matches_reference(self, scale):
+        """A non-default scale changes the output consistently with the formula."""
+        dim = 32
+        module = SinusoidalPosEmb(dim)
+        t = torch.tensor([0.5, 2.0, 100.0])
+        out = module(t, scale=scale)
+        expected = _reference_sinusoidal_emb(t, dim, scale=scale)
+        assert torch.allclose(out, expected, atol=1e-6)
+        assert not torch.allclose(out, module(t), atol=1e-6), "Custom scale should differ from default"
+
+    def test_scalar_input_returns_batch_of_one(self):
+        """A 0-dim scalar tensor is promoted to a batch of one."""
+        dim = 16
+        module = SinusoidalPosEmb(dim)
+        out = module(torch.tensor(3.0))
+        assert out.shape == (1, dim)
+        expected = _reference_sinusoidal_emb(torch.tensor([3.0]), dim, scale=1000)
+        assert torch.allclose(out, expected, atol=1e-6)
+
+    def test_odd_dim_raises_assertion_error(self):
+        """Odd dimensions are rejected at construction time."""
+        with pytest.raises(AssertionError, match="even"):
+            SinusoidalPosEmb(7)
+
+    def test_emb_weights_buffer_values(self):
+        """The cached buffer holds exp(arange(half_dim) * -log(10000)/(half_dim-1))."""
+        dim = 20
+        module = SinusoidalPosEmb(dim)
+        half_dim = dim // 2
+        expected = torch.exp(torch.arange(half_dim).float() * -(math.log(10000) / (half_dim - 1)))
+        assert module.emb_weights.shape == (half_dim,)
+        assert torch.allclose(module.emb_weights, expected, atol=1e-6)
+
+
+class TestSinusoidalPosEmbCheckpointCompat:
+    """Characterization tests: emb_weights is a *persistent* buffer.
+
+    Pre-branch/upstream checkpoints were saved before the register_buffer
+    rewrite and therefore lack the ``time_embeddings.emb_weights`` key, so
+    strict loading currently fails. The intended fix is to register the
+    buffer with ``persistent=False`` (matching the RoPE buffers in the text
+    encoder); once fixed, update these tests to assert strict-load success.
+    """
+
+    def test_emb_weights_present_in_state_dict(self, decoder):
+        """Current behaviour: the buffer is persisted into the state_dict."""
+        keys = [k for k in decoder.state_dict() if "emb_weights" in k]
+        assert keys == ["time_embeddings.emb_weights"]
+
+    def test_strict_load_without_emb_weights_raises(self, decoder, decoder_config):
+        """A checkpoint lacking emb_weights fails strict loading with a clear error."""
+        state_dict = {k: v for k, v in decoder.state_dict().items() if "emb_weights" not in k}
+        fresh = Decoder(**decoder_config)
+        with pytest.raises(RuntimeError, match="emb_weights"):
+            fresh.load_state_dict(state_dict, strict=True)
+
+    def test_non_strict_load_recovers(self, decoder, decoder_config, sample_inputs):
+        """strict=False loads cleanly; the construction-time buffer stays correct."""
+        state_dict = {k: v for k, v in decoder.state_dict().items() if "emb_weights" not in k}
+        fresh = Decoder(**decoder_config)
+        result = fresh.load_state_dict(state_dict, strict=False)
+        assert result.missing_keys == ["time_embeddings.emb_weights"]
+        assert not result.unexpected_keys
+
+        # The buffer was initialized at construction, so embeddings are still correct.
+        t = torch.tensor([0.0, 1.0, 5.5, 999.0])
+        expected = _reference_sinusoidal_emb(t, decoder_config["in_channels"], scale=1000)
+        assert torch.allclose(fresh.time_embeddings(t), expected, atol=1e-6)
+
+        # And the fully-loaded model runs end to end.
+        fresh.eval()
+        x, mu, mask, t_dec = sample_inputs
+        with torch.no_grad():
+            output = fresh(x, mask, mu, t_dec)
         assert output.shape == (2, 80, 20)
