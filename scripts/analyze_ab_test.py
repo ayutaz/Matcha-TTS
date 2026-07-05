@@ -6,6 +6,7 @@ Usage:
         --pairs eval/ab_test/pairs.json \
         --output eval/report/ab_test.json
 """
+
 import argparse
 import json
 import sys
@@ -26,13 +27,9 @@ def analyze_results(results_data, pairs_data):
         choice = result.get("choice", "equal")
         counts[choice] = counts.get(choice, 0) + 1
 
-        if choice == "A" and pair.get("A_is") == "julius":
+        if choice == "A" and pair.get("A_is") == "julius" or choice == "B" and pair.get("B_is") == "julius":
             julius_preferred += 1
-        elif choice == "B" and pair.get("B_is") == "julius":
-            julius_preferred += 1
-        elif choice == "A" and pair.get("A_is") == "mas":
-            mas_preferred += 1
-        elif choice == "B" and pair.get("B_is") == "mas":
+        elif choice == "A" and pair.get("A_is") == "mas" or choice == "B" and pair.get("B_is") == "mas":
             mas_preferred += 1
 
     decisive = julius_preferred + mas_preferred
@@ -73,7 +70,7 @@ def main(argv=None):
 
     report = analyze_results(results, pairs)
 
-    print(f"\n=== A/B Test Results ===")
+    print("\n=== A/B Test Results ===")
     print(f"Julius preferred: {report['julius_preferred']}/{report['total_pairs']}")
     print(f"MAS preferred:    {report['mas_preferred']}/{report['total_pairs']}")
     print(f"Equal:            {report['equal']}/{report['total_pairs']}")

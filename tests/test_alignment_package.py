@@ -84,8 +84,8 @@ class TestConstants:
         """JVSメル統計量の定数"""
         from matcha.alignment.constants import JVS_MEL_MEAN, JVS_MEL_STD
 
-        assert JVS_MEL_MEAN == pytest.approx(-6.550095)
-        assert JVS_MEL_STD == pytest.approx(2.383771)
+        assert pytest.approx(-6.550095) == JVS_MEL_MEAN
+        assert pytest.approx(2.383771) == JVS_MEL_STD
 
     def test_vocab_sizes(self):
         """語彙サイズ定数"""
@@ -189,10 +189,7 @@ class TestBaseAlignerOutput:
 
         lab_path = tmp_path / "malformed.lab"
         lab_path.write_text(
-            "0 30000000 silB\n"
-            "bad line\n"
-            "\n"
-            "30000000 50000000 k\n",
+            "0 30000000 silB\nbad line\n\n30000000 50000000 k\n",
             encoding="utf-8",
         )
         output = JuliusOutput.from_lab_file(lab_path)

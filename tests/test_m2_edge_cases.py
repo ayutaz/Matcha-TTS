@@ -17,7 +17,7 @@ import torch
 
 from matcha.data.precomputed_datamodule import PrecomputedTextMelDataset
 from matcha.data.text_mel_datamodule import TextMelBatchCollate
-from matcha.utils.model import generate_path, sequence_mask, fix_len_compatibility
+from matcha.utils.model import fix_len_compatibility, generate_path, sequence_mask
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ class TestCorruptedNpy:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         from precompute_dataset import load_duration
 
-        with pytest.raises(Exception):  # ValueError or similar from np.load
+        with pytest.raises(ValueError, match="pickled data"):
             load_duration(tmp_path, "jvs001", "UTT001", 7)
 
     def test_empty_npy_raises(self, tmp_path):
@@ -123,7 +123,7 @@ class TestCorruptedNpy:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         from precompute_dataset import load_duration
 
-        with pytest.raises(Exception):
+        with pytest.raises(EOFError, match="No data left in file"):
             load_duration(tmp_path, "jvs001", "UTT001", 7)
 
 

@@ -5,6 +5,7 @@ Usage:
         --report-dir eval/report \
         --output eval/report/eval_report.json
 """
+
 import argparse
 import json
 import sys
@@ -43,9 +44,7 @@ def generate_report(report_dir):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Generate integrated evaluation report from individual metric JSONs"
-    )
+    parser = argparse.ArgumentParser(description="Generate integrated evaluation report from individual metric JSONs")
     parser.add_argument("--report-dir", type=str, required=True)
     parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args(argv)
@@ -64,7 +63,7 @@ def main(argv=None):
 
     # Print summary
     s = report.get("summary", {})
-    print(f"\n=== Evaluation Summary ===")
+    print("\n=== Evaluation Summary ===")
     print(f"Degeneration rate: {s.get('degeneration_rate', 'N/A')}")
     print(f"Phoneme median dur: {s.get('phoneme_median_duration', 'N/A')}")
 

@@ -7,6 +7,7 @@ Usage:
         --output-dir logs/eval/durations \
         --max-samples 500
 """
+
 import argparse
 import json
 import sys
@@ -171,9 +172,9 @@ def main(argv=None):
     )
 
     # Print results
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("Duration Prediction Evaluation Results")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     if "error" in results:
         print(f"Error: {results['error']}")
         return 1
@@ -184,14 +185,18 @@ def main(argv=None):
     print(f"MAE (std):            {results['mae_std']:.2f} frames")
     print(f"Degenerate count:     {results['degenerate_count']}")
     print(f"Degenerate rate:      {results['degenerate_rate']:.1%}")
-    print(f"\nPredicted duration stats:")
-    print(f"  mean={results['pred_duration_stats']['mean']:.2f}, "
-          f"median={results['pred_duration_stats']['median']:.2f}, "
-          f"std={results['pred_duration_stats']['std']:.2f}")
-    print(f"Target duration stats:")
-    print(f"  mean={results['target_duration_stats']['mean']:.2f}, "
-          f"median={results['target_duration_stats']['median']:.2f}, "
-          f"std={results['target_duration_stats']['std']:.2f}")
+    print("\nPredicted duration stats:")
+    print(
+        f"  mean={results['pred_duration_stats']['mean']:.2f}, "
+        f"median={results['pred_duration_stats']['median']:.2f}, "
+        f"std={results['pred_duration_stats']['std']:.2f}"
+    )
+    print("Target duration stats:")
+    print(
+        f"  mean={results['target_duration_stats']['mean']:.2f}, "
+        f"median={results['target_duration_stats']['median']:.2f}, "
+        f"std={results['target_duration_stats']['std']:.2f}"
+    )
 
     # Save results as JSON if output_dir specified
     if args.output_dir:

@@ -7,6 +7,7 @@ Usage:
         --pred-dir eval/samples/julius_model \
         --output eval/report/degeneration.json
 """
+
 import argparse
 import json
 import sys
@@ -85,7 +86,7 @@ def main(argv=None):
 
     report = compute_degeneration_report(all_durations)
 
-    print(f"\n=== Degeneration Report ===")
+    print("\n=== Degeneration Report ===")
     print(f"Total samples:        {report['total_samples']}")
     print(f"Degenerate:           {report['degenerate_count']} ({report['degenerate_rate']:.1%})")
     print(f"Phoneme <= 1 frame:   {report['phoneme_le1_frame_rate']:.1%}")

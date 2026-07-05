@@ -1,14 +1,15 @@
 """Tests for PrecomputedDataModule duration loading."""
+
+from pathlib import Path
+
 import pytest
 import torch
-from pathlib import Path
 
 from matcha.data.precomputed_datamodule import PrecomputedTextMelDataset
 from matcha.data.text_mel_datamodule import TextMelBatchCollate
 
 
-def _make_pt_file(path: Path, text_len: int, mel_len: int, spk: int,
-                  include_durations: bool = False):
+def _make_pt_file(path: Path, text_len: int, mel_len: int, spk: int, include_durations: bool = False):
     """Helper: create a dummy .pt file."""
     text = torch.randint(0, 55, (text_len,), dtype=torch.int32)
     mel = torch.randn(80, mel_len)
@@ -53,8 +54,10 @@ class TestLoadFromDiskWithDurations:
         # text=11, duration=7 (mismatch)
         text = torch.randint(0, 55, (11,), dtype=torch.int32)
         dur = torch.zeros(7, dtype=torch.int32)
-        torch.save({"mel": torch.randn(80, 100), "text": text, "spk": 0,
-                     "cleaned_text": "dummy", "durations": dur}, tmp_path / "bad.pt")
+        torch.save(
+            {"mel": torch.randn(80, 100), "text": text, "spk": 0, "cleaned_text": "dummy", "durations": dur},
+            tmp_path / "bad.pt",
+        )
         ds = PrecomputedTextMelDataset(tmp_path, n_spks=100, load_durations=True)
         with pytest.raises(ValueError, match="Duration length"):
             ds[0]
@@ -63,8 +66,7 @@ class TestLoadFromDiskWithDurations:
         """preload_to_memory=True caches durations in memory."""
         _make_pt_file(tmp_path / "s1.pt", 11, 100, 0, include_durations=True)
         _make_pt_file(tmp_path / "s2.pt", 9, 80, 1, include_durations=True)
-        ds = PrecomputedTextMelDataset(tmp_path, n_spks=100, load_durations=True,
-                                       preload_to_memory=True)
+        ds = PrecomputedTextMelDataset(tmp_path, n_spks=100, load_durations=True, preload_to_memory=True)
         assert 0 in ds._cache
         assert ds._cache[0]["durations"] is not None
 

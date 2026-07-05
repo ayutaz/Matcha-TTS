@@ -61,7 +61,6 @@ from scripts.convert_julius_to_durations import (  # noqa: E402
     time_to_frames,
 )
 
-
 # ===========================================================================
 # 1. Corrupted .lab files
 # ===========================================================================
@@ -143,9 +142,7 @@ class TestLargeUtterances:
         julius_dur = [5] + [3] * 1000 + [5]
         pyopenjtalk_ph = ["^"] + phonemes + ["$"]
 
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
         assert len(result) == len(pyopenjtalk_ph)
         # ^ should get first sil duration
         assert result[0] == 5
@@ -160,9 +157,7 @@ class TestLargeUtterances:
         pyopenjtalk_ph = ["^"] + phonemes + ["$"]
 
         start = time.time()
-        result = align_julius_with_pyopenjtalk_dtw(
-            julius_ph, pyopenjtalk_ph, julius_dur
-        )
+        result = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
         elapsed = time.time() - start
 
         assert len(result) == len(pyopenjtalk_ph)
@@ -184,9 +179,7 @@ class TestLargeUtterances:
         julius_dur = [5] + [3] * 1000 + [5]
         pyopenjtalk_ph = ["^"] + phonemes + ["$"]
 
-        result = align_julius_with_pyopenjtalk(
-            julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential"
-        )
+        result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur, align_mode="sequential")
         # All non-boundary phonemes should have dur=3
         for i in range(1, len(result) - 1):
             assert result[i] == 3, f"Phoneme at index {i} has dur={result[i]}, expected 3"
@@ -251,7 +244,7 @@ class TestAbnormalProsodyPatterns:
         pyopenjtalk_ph = ["^", "[", "k", "a", "$"]
 
         result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur)
-        assert result[0] > 0   # ^ gets silB duration
+        assert result[0] > 0  # ^ gets silB duration
         assert result[0] == 10
         assert result[1] == 0  # [ gets 0
 
@@ -422,9 +415,7 @@ class TestMetricsEdgeCases:
 
     def test_compute_corpus_stats_large_corpus(self):
         """1000-utterance corpus statistics are computed correctly."""
-        corpus = [
-            np.array([0, i + 1, 0, i + 2, 0], dtype=np.int64) for i in range(1000)
-        ]
+        corpus = [np.array([0, i + 1, 0, i + 2, 0], dtype=np.int64) for i in range(1000)]
         stats = compute_corpus_stats(corpus)
         assert stats["total_samples"] == 1000
         # All utterances have phoneme durations >= 1 and >= 2 (i+1 >= 1, i+2 >= 2)

@@ -37,9 +37,7 @@ JULIUS_SAMPLE_RATE = 16000
 
 # Punctuation / symbols to strip from katakana output.
 # pyopenjtalk.g2p(kana=True) may include Japanese punctuation.
-_PUNCT_RE = re.compile(
-    r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　]"
-)
+_PUNCT_RE = re.compile(r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　]")
 
 
 def parse_filelist(filelist_path):
@@ -143,9 +141,7 @@ def _process_one(args_tuple):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Prepare JVS data for Julius segmentation-kit forced alignment."
-    )
+    parser = argparse.ArgumentParser(description="Prepare JVS data for Julius segmentation-kit forced alignment.")
     parser.add_argument(
         "--filelist",
         type=str,
@@ -227,7 +223,7 @@ def main():
     success_count = len(tasks) - len(errors)
     speed = success_count / elapsed if elapsed > 0 else 0
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Success: {success_count}")
     print(f"  Errors:  {len(errors)}")
     print(f"  Speed:   {speed:.1f} files/sec ({elapsed:.1f}s total)")

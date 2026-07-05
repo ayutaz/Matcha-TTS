@@ -1,11 +1,13 @@
 """Tests for validate_precomputed_durations.py"""
-import torch
-import pytest
-from pathlib import Path
 
 import sys
+from pathlib import Path
+
+import pytest
+import torch
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from validate_precomputed_durations import validate, main
+from validate_precomputed_durations import main, validate
 
 
 def _make_valid_pt(path, text_len=11, mel_len=25, with_dur=True):
@@ -46,8 +48,7 @@ class TestValidate:
         text = torch.randint(0, 55, (11,), dtype=torch.int32)
         mel = torch.randn(80, 100)
         dur = torch.ones(11, dtype=torch.int32)  # sum=11 != 100
-        torch.save({"mel": mel, "text": text, "spk": 0,
-                     "cleaned_text": "t", "durations": dur}, tmp_path / "bad.pt")
+        torch.save({"mel": mel, "text": text, "spk": 0, "cleaned_text": "t", "durations": dur}, tmp_path / "bad.pt")
         stats = validate(tmp_path, expect_durations=True)
         assert stats["dur_sum_mismatches"] == 1
 
@@ -55,8 +56,10 @@ class TestValidate:
         """負のduration値が検出されること"""
         text = torch.randint(0, 55, (5,), dtype=torch.int32)
         dur = torch.tensor([0, -1, 0, 5, 0], dtype=torch.int32)
-        torch.save({"mel": torch.randn(80, 4), "text": text, "spk": 0,
-                     "cleaned_text": "t", "durations": dur}, tmp_path / "neg.pt")
+        torch.save(
+            {"mel": torch.randn(80, 4), "text": text, "spk": 0, "cleaned_text": "t", "durations": dur},
+            tmp_path / "neg.pt",
+        )
         stats = validate(tmp_path, expect_durations=True)
         assert stats["negative_durations"] == 1
 
@@ -64,8 +67,10 @@ class TestValidate:
         """duration長 != text長が検出されること"""
         text = torch.randint(0, 55, (11,), dtype=torch.int32)
         dur = torch.ones(7, dtype=torch.int32)  # 7 != 11
-        torch.save({"mel": torch.randn(80, 100), "text": text, "spk": 0,
-                     "cleaned_text": "t", "durations": dur}, tmp_path / "len.pt")
+        torch.save(
+            {"mel": torch.randn(80, 100), "text": text, "spk": 0, "cleaned_text": "t", "durations": dur},
+            tmp_path / "len.pt",
+        )
         stats = validate(tmp_path, expect_durations=True)
         assert any("Duration len" in msg for _, msg in stats["errors"])
 
