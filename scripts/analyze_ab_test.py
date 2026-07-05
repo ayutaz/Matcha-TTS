@@ -17,6 +17,9 @@ from scipy.stats import binomtest
 
 def analyze_results(results_data, pairs_data):
     """Analyze A/B test results."""
+    if len(results_data) != len(pairs_data):
+        raise ValueError(f"results/pairs length mismatch: {len(results_data)} results vs {len(pairs_data)} pairs")
+
     # Count preferences
     counts = {"A": 0, "B": 0, "equal": 0}
     julius_preferred = 0
@@ -65,10 +68,14 @@ def main(argv=None):
             print(f"File not found: {p}", file=sys.stderr)
             return 1
 
-    results = json.loads(Path(args.results).read_text())
-    pairs = json.loads(Path(args.pairs).read_text())
+    results = json.loads(Path(args.results).read_text(encoding="utf-8"))
+    pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
 
-    report = analyze_results(results, pairs)
+    try:
+        report = analyze_results(results, pairs)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     print("\n=== A/B Test Results ===")
     print(f"Julius preferred: {report['julius_preferred']}/{report['total_pairs']}")
@@ -80,7 +87,7 @@ def main(argv=None):
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(report, indent=2))
+        Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return 0
 

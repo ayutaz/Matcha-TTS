@@ -22,7 +22,7 @@ def load_durations_from_json(pred_dir):
     """Load duration arrays from _dur.json files."""
     all_durations = []
     for json_path in sorted(Path(pred_dir).rglob("*_dur.json")):
-        data = json.loads(json_path.read_text())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
         if "predicted_durations" in data:
             dur = np.array(data["predicted_durations"], dtype=np.int64)
             all_durations.append(
@@ -96,7 +96,7 @@ def main(argv=None):
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(report, indent=2))
+        Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return 0
 

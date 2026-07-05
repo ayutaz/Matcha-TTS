@@ -153,17 +153,33 @@ def ipa_simplifier(text):
 _PHONEME_RE = re.compile(r"-([^+]+)\+")
 _A1_RE = re.compile(r"/A:([0-9-]+)\+")
 _A2_RE = re.compile(r"/A:[0-9-]+\+(\d+)\+")
+_A3_RE = re.compile(r"/A:[0-9-]+\+\d+\+(\d+)")
+_E3_RE = re.compile(r"!(\d+)_")
 _F1_RE = re.compile(r"/F:(\d+)_")
+
+# Phonemes that may carry an accent-phrase-boundary marker (ttslearn pp_symbols)
+_BOUNDARY_PHONEMES = "aeiouAEIOUNcl"
 
 
 def _fullcontext_to_prosody(labels):
     """Convert HTS full-context labels to prosody-annotated phoneme sequence.
 
     This follows the ttslearn ``pp_symbols`` convention:
-      - ``^`` / ``$`` / ``?`` : utterance start / end / pause-end
+      - ``^`` / ``$`` / ``?`` : utterance start / declarative end / interrogative end
       - ``_`` : pause (pau)
       - ``#`` : accent phrase boundary
-      - ``[`` / ``]`` : pitch rise / fall
+      - ``[`` / ``]`` : pitch rise / fall, emitted once per mora transition
+        AFTER the phoneme they follow (e.g. ``m i [ z u o``)
+
+    Unlike ttslearn (``drop_unvoiced_vowels=True``), devoiced vowels are kept
+    uppercase because ``symbols_ja`` has dedicated A/E/I/O/U entries.
+
+    .. warning::
+        This convention replaced an earlier one (markers BEFORE the phoneme,
+        possibly several per phoneme, ``$`` for interrogative-final sil).
+        Checkpoints, precomputed ``.pt`` datasets and duration ``.npy`` files
+        produced with the old convention are incompatible and must be
+        regenerated (see CLAUDE.md 「日本語プロソディ表記の変更」).
     """
     phonemes = []
     for i, label in enumerate(labels):
@@ -175,42 +191,42 @@ def _fullcontext_to_prosody(labels):
 
         # Handle silence / pause
         if ph == "sil":
-            # First sil -> ^, last sil -> $, others -> ? (shouldn't appear normally)
             if i == 0:
                 phonemes.append("^")
-            elif i == len(labels) - 1:
-                phonemes.append("$")
             else:
-                phonemes.append("?")
+                # E3 == 1 marks an interrogative utterance (e.g. 「…ですか？」)
+                e3_m = _E3_RE.search(label)
+                is_question = e3_m is not None and int(e3_m.group(1)) == 1
+                phonemes.append("?" if is_question else "$")
             continue
         if ph == "pau":
             phonemes.append("_")
             continue
 
-        # Extract accent features
+        phonemes.append(ph)
+
+        # Extract accent features (/A:a1+a2+a3 … /F:f1_…)
         a1_m = _A1_RE.search(label)
         a2_m = _A2_RE.search(label)
+        a3_m = _A3_RE.search(label)
         f1_m = _F1_RE.search(label)
-        if a1_m is None or a2_m is None or f1_m is None:
-            phonemes.append(ph)
+        if a1_m is None or a2_m is None or a3_m is None or f1_m is None:
             continue
-        a1 = int(a1_m.group(1))  # mora position in accent phrase
-        a2 = int(a2_m.group(1))  # accent nucleus position
+        a1 = int(a1_m.group(1))  # mora position relative to accent nucleus (0 = nucleus)
+        a2 = int(a2_m.group(1))  # mora position in accent phrase (forward)
+        a3 = int(a3_m.group(1))  # mora position in accent phrase (backward)
         f1 = int(f1_m.group(1))  # mora count in accent phrase
 
-        # Accent phrase boundary
+        # a2 of the NEXT label detects mora / accent-phrase transitions
         a2_next_m = _A2_RE.search(labels[i + 1]) if i + 1 < len(labels) else None
         a2_next = int(a2_next_m.group(1)) if a2_next_m is not None else -1
-        if a1 == 1 and a2_next == 1:
-            phonemes.append("#")
 
-        # Pitch rise / fall markers
-        if a2 == 1 and a1 == 1:
-            phonemes.append("[")
-        elif a1 == a2 + 1 and a2 != f1:
-            phonemes.append("]")
-
-        phonemes.append(ph)
+        if a3 == 1 and a2_next == 1 and ph in _BOUNDARY_PHONEMES:
+            phonemes.append("#")  # accent phrase boundary
+        elif a1 == 0 and a2_next == a2 + 1 and a2 != f1:
+            phonemes.append("]")  # pitch fall (accent nucleus)
+        elif a2 == 1 and a2_next == 2:
+            phonemes.append("[")  # pitch rise
 
     return phonemes
 

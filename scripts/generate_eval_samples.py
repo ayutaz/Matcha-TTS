@@ -22,11 +22,19 @@ from tqdm import tqdm
 
 
 def parse_speaker_range(spec: str) -> list[int]:
-    """Parse speaker range spec like '0-99' or '0,5,10'."""
-    if "-" in spec and "," not in spec:
-        start, end = spec.split("-")
-        return list(range(int(start), int(end) + 1))
-    return [int(s) for s in spec.split(",")]
+    """Parse speaker range spec like '0-99', '0,5,10', or a mix like '0-9,12'."""
+    speakers = []
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            start_str, end_str = part.split("-")
+            start, end = int(start_str), int(end_str)
+            if start > end:
+                raise ValueError(f"Reversed speaker range: {part!r}")
+            speakers.extend(range(start, end + 1))
+        else:
+            speakers.append(int(part))
+    return speakers
 
 
 def load_model(checkpoint_path: str, device: str = "cpu"):

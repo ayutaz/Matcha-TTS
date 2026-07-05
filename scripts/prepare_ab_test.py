@@ -71,7 +71,7 @@ def main(argv=None):
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "pairs.json").write_text(json.dumps(pairs, indent=2))
+    (output_dir / "pairs.json").write_text(json.dumps(pairs, indent=2), encoding="utf-8")
     print(f"Selected {len(pairs)} A/B test pairs")
 
     return 0

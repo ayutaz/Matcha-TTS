@@ -9,7 +9,9 @@ Covers:
     output file naming
   - batched_collate_fn: right zero-padding and order preservation
   - validate_args: custom-checkpoint branch
-  - get_texts: UTF-8 file reading
+  - get_texts: UTF-8 file reading, newline stripping, empty-line dropping
+  - assert_required_models_available: pretrained download skipped for custom
+    checkpoints
 """
 
 import argparse
@@ -165,7 +167,9 @@ class TestCliLanguageAutoDetect:
         monkeypatch.setattr(sys, "argv", argv)
         monkeypatch.setattr(cli_module, "get_device", lambda args: torch.device("cpu"))
         monkeypatch.setattr(
-            cli_module, "assert_required_models_available", lambda args: {"matcha": None, "vocoder": None}
+            cli_module,
+            "assert_required_models_available",
+            lambda args: {"matcha": args.checkpoint_path, "vocoder": None},
         )
         monkeypatch.setattr(cli_module, "load_matcha", lambda name, path, device: model_stub)
         monkeypatch.setattr(cli_module, "load_vocoder", lambda name, path, device: (MagicMock(), MagicMock()))
@@ -419,13 +423,69 @@ class TestGetTexts:
     """Test text-source resolution (inline text vs UTF-8 file)."""
 
     def test_reads_utf8_file_undamaged(self, tmp_path):
-        lines = ["こんにちは、世界。\n", "ありがとうございました。\n"]
+        lines = ["こんにちは、世界。", "ありがとうございました。"]
         text_file = tmp_path / "texts.txt"
-        text_file.write_text("".join(lines), encoding="utf-8")
+        text_file.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
         args = argparse.Namespace(text=None, file=str(text_file))
         assert get_texts(args) == lines
 
+    def test_strips_newlines_and_drops_empty_lines(self, tmp_path):
+        """Regression: raw readlines() output reached batched_synthesis, so a
+        blank line became a length-1 all-blank sequence synthesised as noise."""
+        text_file = tmp_path / "texts.txt"
+        text_file.write_text("hello world\n\n  \nsecond line\n\n", encoding="utf-8")
+
+        args = argparse.Namespace(text=None, file=str(text_file))
+        assert get_texts(args) == ["hello world", "second line"]
+
     def test_inline_text_takes_priority(self):
         args = argparse.Namespace(text="hello", file=None)
         assert get_texts(args) == ["hello"]
+
+
+# ---------------------------------------------------------------------------
+# 7. assert_required_models_available — custom checkpoint skips download
+# ---------------------------------------------------------------------------
+
+
+class TestAssertRequiredModelsAvailable:
+    """Test that a custom checkpoint skips the pretrained-model download."""
+
+    def _run(self, monkeypatch, tmp_path, args):
+        downloads = []
+        monkeypatch.setattr(cli_module, "get_user_data_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            cli_module, "assert_model_downloaded", lambda path, url: downloads.append((Path(path), url))
+        )
+        paths = cli_module.assert_required_models_available(args)
+        return paths, downloads
+
+    def test_custom_checkpoint_skips_pretrained_download(self, monkeypatch, tmp_path):
+        """Regression: the inverted hasattr condition asserted the pretrained
+        matcha download even when --checkpoint_path was provided."""
+        args = _default_args(checkpoint_path="model.ckpt", vocoder="hifigan_univ_v1")
+        paths, downloads = self._run(monkeypatch, tmp_path, args)
+
+        # Only the vocoder is checked/downloaded, never the pretrained matcha
+        assert [p.name for p, _ in downloads] == ["hifigan_univ_v1"]
+        assert downloads[0][1] == cli_module.VOCODER_URLS["hifigan_univ_v1"]
+        assert paths["matcha"] == "model.ckpt"
+        assert paths["vocoder"] == tmp_path / "hifigan_univ_v1"
+
+    def test_no_checkpoint_downloads_pretrained_model(self, monkeypatch, tmp_path):
+        args = _default_args(vocoder="hifigan_T2_v1")
+        paths, downloads = self._run(monkeypatch, tmp_path, args)
+
+        assert [p.name for p, _ in downloads] == ["matcha_ljspeech.ckpt", "hifigan_T2_v1"]
+        assert downloads[0][1] == cli_module.MATCHA_URLS["matcha_ljspeech"]
+        assert paths["matcha"] == tmp_path / "matcha_ljspeech.ckpt"
+
+    def test_missing_checkpoint_attribute_treated_as_none(self, monkeypatch, tmp_path):
+        """Regression: args without a checkpoint_path attribute used to raise
+        AttributeError in the condition's second operand."""
+        args = argparse.Namespace(model="matcha_ljspeech", vocoder="hifigan_univ_v1")
+        paths, downloads = self._run(monkeypatch, tmp_path, args)
+
+        assert [p.name for p, _ in downloads] == ["matcha_ljspeech.ckpt", "hifigan_univ_v1"]
+        assert paths["matcha"] == tmp_path / "matcha_ljspeech.ckpt"

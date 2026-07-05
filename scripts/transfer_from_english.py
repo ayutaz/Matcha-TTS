@@ -17,7 +17,7 @@ import torch
 from torch import nn
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Create a Japanese initial checkpoint from an English Matcha-TTS model"
     )
@@ -30,7 +30,7 @@ def main():
         default=None,
         help="Embedding dimension. Auto-detected from checkpoint if omitted.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     source_path = Path(args.source)
     target_path = Path(args.target)

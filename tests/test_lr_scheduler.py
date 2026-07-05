@@ -288,6 +288,54 @@ class TestConfigureOptimizersIntegration:
             module.configure_optimizers()
 
 
+class TestPlainDictConfig:
+    """build_warmup_cosine_scheduler must honor plain-dict configs.
+
+    configure_optimizers routes dict-based warmup_cosine_safe configs here via
+    _cfg_get, so the builder itself must read keys with _cfg_get too — with
+    getattr() a plain dict silently fell back to the hard-coded defaults.
+    """
+
+    _DICT_CFG = {
+        "type": "warmup_cosine_safe",
+        "warmup_steps": 10,
+        "start_factor": 0.5,
+        "T_max": 100,
+        "eta_min": 1e-6,
+    }
+
+    def test_dict_config_params_are_honored(self):
+        """warmup_steps/start_factor/T_max/eta_min from a plain dict drive the schedule."""
+        optimizer = _make_optimizer(lr=1e-4)
+        scheduler = build_warmup_cosine_scheduler(optimizer, dict(self._DICT_CFG))
+
+        # start_factor=0.5 honored at step 0 (defaults would give 1e-5)
+        assert _get_lr(optimizer) == pytest.approx(1e-4 * 0.5, rel=1e-6)
+
+        # warmup_steps=10 honored: peak reached after 10 steps (defaults: 500)
+        for _ in range(10):
+            scheduler.step()
+        assert _get_lr(optimizer) == pytest.approx(1e-4, rel=1e-5)
+
+        # T_max=100 / eta_min=1e-6 honored: cosine floor reached (defaults: 20000 / 5e-5)
+        for _ in range(100):
+            scheduler.step()
+        assert _get_lr(optimizer) == pytest.approx(1e-6, rel=1e-3)
+
+    def test_dict_config_via_configure_optimizers(self):
+        """The dict form routed by configure_optimizers produces the configured schedule."""
+        module = _make_dummy_module()
+        module.hparams.scheduler = dict(self._DICT_CFG)
+
+        result = module.configure_optimizers()
+
+        lr_sched = result["lr_scheduler"]
+        assert lr_sched["interval"] == "step"
+        assert isinstance(lr_sched["scheduler"], torch.optim.lr_scheduler.SequentialLR)
+        # start_factor from the dict is applied, not the 0.1 default
+        assert result["optimizer"].param_groups[0]["lr"] == pytest.approx(1e-4 * 0.5, rel=1e-6)
+
+
 class TestCustomParameters:
     """Ensure non-default parameter values are respected."""
 

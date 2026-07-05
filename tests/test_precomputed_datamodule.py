@@ -286,6 +286,15 @@ class TestScanAndSeededShuffle:
         assert sorted(ds1.pt_paths) == sorted(ds2.pt_paths)
         assert ds1.pt_paths != ds2.pt_paths
 
+    def test_global_random_state_untouched(self, tmp_path):
+        """The seeded shuffle must use a local RNG, not reseed the global random module."""
+        for i in range(6):
+            _make_pt_file(tmp_path / f"s{i:02d}.pt", 11, 20 + i * 5, 0)
+        random.seed(999)
+        state_before = random.getstate()
+        PrecomputedTextMelDataset(tmp_path, n_spks=100, seed=42)
+        assert random.getstate() == state_before
+
 
 class TestGetFileSizes:
     """get_file_sizes index alignment (post-shuffle) and caching."""
@@ -349,6 +358,71 @@ class TestPreloadServing:
         with pytest.raises((FileNotFoundError, OSError, RuntimeError)):
             ds[0]
 
+    def test_mutating_returned_item_does_not_corrupt_cache(self, tmp_path):
+        """__getitem__ must return a copy of the cached dict: in-place mutation of a
+        returned item must not affect the next access to the same index."""
+        _make_pt_dir(tmp_path, 2)
+        ds = PrecomputedTextMelDataset(tmp_path, n_spks=100, seed=1, preload_to_memory=True)
+
+        item = ds[0]
+        original_x = item["x"]
+        item["x"] = None
+        item.pop("y")
+
+        fresh = ds[0]
+        assert fresh is not item
+        assert fresh["x"] is not None
+        assert torch.equal(fresh["x"], original_x)
+        assert "y" in fresh
+
+
+class TestSetupIdempotent:
+    """setup() must not rebuild the datasets when called for a second stage
+    (Lightning calls it for fit AND validate/test), otherwise preload_to_memory
+    re-loads everything into RAM twice."""
+
+    def _datamodule(self, tmp_path):
+        train_dir = tmp_path / "train"
+        val_dir = tmp_path / "val"
+        _make_pt_dir(train_dir, 4)
+        _make_pt_dir(val_dir, 4)
+        return PrecomputedTextMelDataModule(
+            name="test_precomputed",
+            train_pt_dir=str(train_dir),
+            val_pt_dir=str(val_dir),
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            n_spks=100,
+            n_feats=80,
+            seed=42,
+            load_durations=False,
+            preload_to_memory=True,
+            num_buckets=2,
+        )
+
+    def test_second_setup_does_not_reload(self, tmp_path, monkeypatch):
+        dm = self._datamodule(tmp_path)
+
+        calls = {"n": 0}
+        real_load = torch.load
+
+        def counting_load(*args, **kwargs):
+            calls["n"] += 1
+            return real_load(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "load", counting_load)
+
+        dm.setup("fit")
+        first_pass_loads = calls["n"]
+        assert first_pass_loads == 8  # 4 train + 4 val preloaded once
+        trainset, validset = dm.trainset, dm.validset
+
+        dm.setup("validate")
+        assert calls["n"] == first_pass_loads  # no re-load
+        assert dm.trainset is trainset  # same dataset objects kept
+        assert dm.validset is validset
+
 
 class TestDistributedSamplerEqualBatchCounts:
     """NCCL-deadlock guard: every rank must yield exactly the same number of batches."""
@@ -386,7 +460,9 @@ class TestDistributedSamplerEqualBatchCounts:
 
 
 class TestBucketSamplerEpochAdvance:
-    """BucketBatchSampler auto-advances its internal epoch on each iteration."""
+    """BucketBatchSampler auto-advances its epoch as a fallback when nothing calls
+    set_epoch between iterations.  ``epoch`` reflects the epoch used by the most
+    recent iteration (the advance is applied lazily at the start of the next one)."""
 
     @staticmethod
     def _file_sizes(n=64, seed=42):
@@ -394,14 +470,14 @@ class TestBucketSamplerEpochAdvance:
         return [rng.randint(5000, 50000) for _ in range(n)]
 
     def test_second_iteration_differs_from_first(self):
-        """Iterating the same sampler twice yields different batch orders (epoch increments)."""
+        """Iterating the same sampler twice yields different batch orders (epoch auto-advances)."""
         file_sizes = self._file_sizes()
         sampler = BucketBatchSampler(file_sizes, batch_size=4, num_buckets=4, drop_last=False, seed=123)
         assert sampler.epoch == 0
         first = [tuple(b) for b in sampler]
-        assert sampler.epoch == 1
+        assert sampler.epoch == 0  # epoch used by the iteration just taken
         second = [tuple(b) for b in sampler]
-        assert sampler.epoch == 2
+        assert sampler.epoch == 1  # fallback advance applied on the second iteration
         assert first != second
         # Both epochs cover the same sample set
         assert sorted(i for b in first for i in b) == sorted(i for b in second for i in b)

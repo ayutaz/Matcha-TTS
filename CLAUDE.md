@@ -375,6 +375,19 @@ MASをバイパスし、外部forced alignerで正確なphoneme durationを事�
 - **VCTK設定**: LJSpeechと完全同一。MAS退化対策は一切なし
 - **英語178音素 vs 日本語55音素**: 英語は音素粒度が細かくμ_xの区別が容易なためMAS退化が起きにくい
 
+### 日本語プロソディ表記の変更（BREAKING、2026-07）
+
+`japanese_cleaners`（`matcha/text/cleaners.py` の `_fullcontext_to_prosody`）を ttslearn `pp_symbols` / ESPnet `pyopenjtalk_g2p_prosody` 準拠に修正した。音素トークン列がほぼ全発話で変化する:
+
+- **マーカー位置**: `[` / `]` / `#` を対応する音素の**直後**に出力（旧実装は直前）。例: 旧 `^ # [ k a $` → 新 `^ k a ? `
+- **マーカー数**: elifチェーンにより1音素につき最大1マーカー（旧実装は `#` と `[` を同時に出力することがあり、シーケンス長も変化）
+- **疑問文**: 文末silはE3フラグにより `$` ではなく `?` を出力（例: 「元気ですか？」）
+
+**移行が必要な資産（旧convention と新cleanerの混在は不可）**:
+- 旧conventionで学習した日本語checkpoint → 新cleanerでの推論は品質が劣化する（エラーは出ない）。再学習が必要
+- 事前計算済み `.pt` データセット（`data/jvs_precomputed*`、`jvs_precomputed_aligned`。`x`列が焼き込み済み）と `durations/*.npy` → precompute/alignmentパイプライン（`run_optimized_pipeline.py`等）の再実行が必要
+- Julius alignment側の `?` 対応は `scripts/convert_julius_to_durations.py` / `matcha/alignment/base.py` で実装済み（`?` は疑問文の文末silとして `$` と同様にdurationを持つ。duration=0の韻律記号は `#` `[` `]` のみ）
+
 ### JVSデータの注意点
 - **無音トリミング必須**: JVSコーパスは各発話の先頭/末尾に~500msの無音を含む。`prepare_jvs.py`で自動トリミング（`top_db=30`、50msマージン）
 - **mel統計量**: トリミング後のデータで再計算が必要（`mel_mean: -6.550095`, `mel_std: 2.383771`）

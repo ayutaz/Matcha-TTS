@@ -49,6 +49,9 @@ def parse_lab_file(lab_path: Path) -> list[str]:
             elif len(parts) == 1:
                 # Some formats may have just the phoneme
                 phonemes.append(parts[0])
+            else:
+                # 2-token lines match neither format; warn instead of dropping silently
+                print(f"Warning: skipping unparseable line in {lab_path}: {line!r}", file=sys.stderr)
     return phonemes
 
 

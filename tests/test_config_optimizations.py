@@ -15,14 +15,14 @@ CONFIGS_DIR = Path(__file__).resolve().parent.parent / "configs"
 @pytest.fixture
 def jvs_fast_config():
     path = CONFIGS_DIR / "experiment" / "jvs_fast.yaml"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 @pytest.fixture
 def ddp_optimized_config():
     path = CONFIGS_DIR / "trainer" / "ddp_optimized.yaml"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -64,13 +64,13 @@ class TestJvsAlignedConfig:
     @pytest.fixture
     def jvs_aligned_config(self):
         path = CONFIGS_DIR / "experiment" / "jvs_aligned.yaml"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     @pytest.fixture
     def jvs_precomputed_aligned_config(self):
         path = CONFIGS_DIR / "data" / "jvs_precomputed_aligned.yaml"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     def test_compile_model_disabled(self, jvs_aligned_config):
@@ -104,7 +104,7 @@ class TestJvsAlignedConfig:
     def test_model_config_has_use_precomputed_durations(self):
         """matcha.yaml should reference ${data.load_durations}."""
         path = CONFIGS_DIR / "model" / "matcha.yaml"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
         assert config["use_precomputed_durations"] == "${data.load_durations}"
 

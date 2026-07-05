@@ -81,6 +81,29 @@ class TestGenerateEvalSamples:
         assert parse_speaker_range("0,5,10") == [0, 5, 10]
         assert parse_speaker_range("0-4") == [0, 1, 2, 3, 4]
 
+    def test_parse_speaker_range_mixed_commas_and_ranges(self):
+        """カンマとレンジの混在指定"""
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from generate_eval_samples import parse_speaker_range
+
+        assert parse_speaker_range("0-9,12") == [*range(10), 12]
+        assert parse_speaker_range("3,5-7,10") == [3, 5, 6, 7, 10]
+        assert parse_speaker_range("1-2,4-5") == [1, 2, 4, 5]
+
+    def test_parse_speaker_range_reversed_raises(self):
+        """逆順レンジはValueError（黙って空リストにしない）"""
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from generate_eval_samples import parse_speaker_range
+
+        with pytest.raises(ValueError, match="Reversed speaker range"):
+            parse_speaker_range("9-0")
+        with pytest.raises(ValueError, match="Reversed speaker range"):
+            parse_speaker_range("0-3,7-5")
+
     def test_dry_run_without_checkpoint(self, tmp_path):
         """チェックポイントなしでdry-runが動作"""
         import sys
@@ -106,7 +129,7 @@ class TestGenerateEvalSamples:
         # metadata.jsonが生成される
         meta_path = output_dir / "metadata.json"
         assert meta_path.exists()
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         assert meta["status"] == "dry_run"
 
     def test_missing_text_file_returns_error(self):

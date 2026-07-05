@@ -69,13 +69,14 @@ def get_texts(args):
         texts = [args.text]
     else:
         with open(args.file, encoding="utf-8") as f:
-            texts = f.readlines()
+            texts = [line.strip() for line in f if line.strip()]
     return texts
 
 
 def assert_required_models_available(args):
     save_dir = get_user_data_dir()
-    if not hasattr(args, "checkpoint_path") and args.checkpoint_path is None:
+    if getattr(args, "checkpoint_path", None) is not None:
+        # Custom checkpoint provided: skip the pretrained-model download check
         model_path = args.checkpoint_path
     else:
         model_path = save_dir / f"{args.model}.ckpt"

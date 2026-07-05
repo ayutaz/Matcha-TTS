@@ -236,38 +236,37 @@ class TestTransferFromEnglish:
         torch.save(ckpt, path)
         return ckpt
 
-    def _run_main(self, monkeypatch, argv):
-        """Run transfer_from_english.main() with a patched sys.argv."""
-        monkeypatch.setattr(sys, "argv", ["transfer_from_english.py", *argv])
-        transfer_main()
+    def _run_main(self, argv):
+        """Run transfer_from_english.main() with an explicit argv list."""
+        transfer_main(argv)
 
-    def test_vocab_surgery_happy_path(self, tmp_path, monkeypatch):
+    def test_vocab_surgery_happy_path(self, tmp_path):
         """Embedding is resized to the new vocab; all other weights are preserved."""
         src = tmp_path / "en.ckpt"
         dst = tmp_path / "ja.ckpt"
         original = self._make_ckpt(src)
 
-        self._run_main(monkeypatch, ["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
+        self._run_main(["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
 
         out = torch.load(dst, weights_only=True)
         assert out["state_dict"]["encoder.emb.weight"].shape == (55, 192)
         assert torch.equal(out["state_dict"]["decoder.some.weight"], original["state_dict"]["decoder.some.weight"])
         assert out["hyper_parameters"]["n_vocab"] == 55
 
-    def test_missing_emb_key_raises_keyerror(self, tmp_path, monkeypatch):
+    def test_missing_emb_key_raises_keyerror(self, tmp_path):
         """Checkpoint without encoder.emb.weight raises KeyError listing emb-like keys."""
         src = tmp_path / "en.ckpt"
         dst = tmp_path / "ja.ckpt"
         torch.save({"state_dict": {"encoder.token_emb.weight": torch.randn(178, 192)}}, src)
 
         with pytest.raises(KeyError) as excinfo:
-            self._run_main(monkeypatch, ["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
+            self._run_main(["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
         msg = str(excinfo.value)
         assert "'encoder.emb.weight' not found" in msg
         assert "encoder.token_emb.weight" in msg
         assert not dst.exists()
 
-    def test_n_channels_mismatch_raises_valueerror(self, tmp_path, monkeypatch):
+    def test_n_channels_mismatch_raises_valueerror(self, tmp_path):
         """A --n-channels value conflicting with the checkpoint dim raises ValueError."""
         src = tmp_path / "en.ckpt"
         dst = tmp_path / "ja.ckpt"
@@ -275,26 +274,24 @@ class TestTransferFromEnglish:
 
         with pytest.raises(ValueError, match="does not match checkpoint"):
             self._run_main(
-                monkeypatch,
                 ["--source", str(src), "--target", str(dst), "--n-vocab-new", "55", "--n-channels", "256"],
             )
         assert not dst.exists()
 
-    def test_nonexistent_source_raises(self, tmp_path, monkeypatch):
+    def test_nonexistent_source_raises(self, tmp_path):
         """A missing --source checkpoint raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="Source checkpoint not found"):
             self._run_main(
-                monkeypatch,
                 ["--source", str(tmp_path / "missing.ckpt"), "--target", str(tmp_path / "out.ckpt")],
             )
 
-    def test_missing_hyper_parameters_still_saves(self, tmp_path, monkeypatch):
+    def test_missing_hyper_parameters_still_saves(self, tmp_path):
         """A checkpoint lacking hyper_parameters is still converted and saved."""
         src = tmp_path / "en.ckpt"
         dst = tmp_path / "ja.ckpt"
         self._make_ckpt(src, with_hparams=False)
 
-        self._run_main(monkeypatch, ["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
+        self._run_main(["--source", str(src), "--target", str(dst), "--n-vocab-new", "55"])
 
         out = torch.load(dst, weights_only=True)
         assert out["state_dict"]["encoder.emb.weight"].shape == (55, 192)
@@ -389,13 +386,13 @@ class TestCheckTrainingHealth:
         ret = main(["--log-dir", str(tmp_path)])
         assert ret == 1
 
-    def test_empty_tb_subdir_shadows_root_events(self, tmp_path):
-        """Characterization: an empty tensorboard/ subdir hides root-level event files.
+    def test_empty_tb_subdir_falls_back_to_root_events(self, tmp_path):
+        """An empty tensorboard/ subdir must not hide root-level event files.
 
-        check_health() searches the log-dir root only when tensorboard/ does
-        NOT exist.  When the subdir exists but is empty, event files at the
-        log-dir root are NOT counted.  This test pins the current precedence
-        so that a future refactor of the lookup order is a deliberate change.
+        check_health() prefers the tensorboard/ subdir, but when it exists and
+        contains no event files, the search falls back to the whole log dir so
+        root-level events are still counted (regression test for the false
+        'No TensorBoard event files found' report).
         """
         (tmp_path / "checkpoints").mkdir()
         (tmp_path / "checkpoints" / "last.ckpt").touch()
@@ -403,5 +400,28 @@ class TestCheckTrainingHealth:
         (tmp_path / "events.out.tfevents.11111").touch()  # root-level events
 
         results = check_health(tmp_path)
-        assert results["tensorboard_events"] == 0
-        assert "No TensorBoard event files found" in results["issues"]
+        assert results["tensorboard_events"] == 1
+        assert "No TensorBoard event files found" not in results["issues"]
+
+
+class TestValidateJuliusMappingParseLab:
+    """Tests for validate_julius_mapping.parse_lab_file line handling."""
+
+    def test_three_and_one_token_lines_parsed(self, tmp_path):
+        from validate_julius_mapping import parse_lab_file
+
+        lab = tmp_path / "a.lab"
+        lab.write_text("0.0000 0.1000 sil\n0.1000 0.2000 a\npau\n\n", encoding="utf-8")
+        assert parse_lab_file(lab) == ["sil", "a", "pau"]
+
+    def test_two_token_line_warns_instead_of_vanishing(self, tmp_path, capsys):
+        """A 2-token line matches neither format; it must produce a warning, not silence."""
+        from validate_julius_mapping import parse_lab_file
+
+        lab = tmp_path / "b.lab"
+        lab.write_text("0.0000 0.1000 sil\n0.2000 a\n0.3000 0.4000 o\n", encoding="utf-8")
+        phonemes = parse_lab_file(lab)
+        assert phonemes == ["sil", "o"]
+        err = capsys.readouterr().err
+        assert "Warning" in err
+        assert "0.2000 a" in err

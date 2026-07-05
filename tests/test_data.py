@@ -1,5 +1,7 @@
 """Tests for matcha.data.text_mel_datamodule (collation, instantiation, utilities)."""
 
+import random
+
 import numpy as np
 import pytest
 import torch
@@ -486,6 +488,55 @@ class TestGetTextJapanese:
         # ja encodes one id per space-separated token, en one id per character
         assert x_ja.tolist() != x_en.tolist()
 
+    def test_add_blank_false_overrides_dataset_default(self, tmp_path):
+        """An explicit add_blank=False must win over the dataset's add_blank=True."""
+        ds = _make_dataset(tmp_path, language="ja")  # ds.add_blank is True
+        x, cleaned = ds.get_text(self.TEXT, add_blank=False)
+        expected_ids = cleaned_text_to_sequence(cleaned, language="ja")
+        assert x.tolist() == expected_ids  # no interspersed blanks
+
+    def test_add_blank_default_uses_dataset_setting(self, tmp_path):
+        """Omitting add_blank (None) falls back to the dataset's add_blank."""
+        ds = _make_dataset(tmp_path, language="ja")
+        x_default, _ = ds.get_text(self.TEXT)
+        x_true, _ = ds.get_text(self.TEXT, add_blank=True)
+        assert x_default.tolist() == x_true.tolist()
+
+
+# ---------------------------------------------------------------------------
+# TextMelDataset — seeded shuffle isolation
+# ---------------------------------------------------------------------------
+
+
+class TestSeededShuffleIsolation:
+    """The seeded filelist shuffle must use a local RNG, not reseed the global
+    random module (a process-wide side effect)."""
+
+    def _multi_line_filelist(self, tmp_path):
+        lines = "\n".join(f"audio_{i:02d}.wav|text {i}" for i in range(10))
+        flist = tmp_path / "filelist.txt"
+        flist.write_text(lines + "\n", encoding="utf-8")
+        return str(flist)
+
+    def _dataset(self, tmp_path, seed):
+        return TextMelDataset(
+            filelist_path=self._multi_line_filelist(tmp_path),
+            n_spks=1,
+            cleaners=["basic_cleaners"],
+            seed=seed,
+        )
+
+    def test_global_random_state_untouched(self, tmp_path):
+        random.seed(999)
+        state_before = random.getstate()
+        self._dataset(tmp_path, seed=42)
+        assert random.getstate() == state_before
+
+    def test_same_seed_gives_identical_order(self, tmp_path):
+        ds1 = self._dataset(tmp_path, seed=42)
+        ds2 = self._dataset(tmp_path, seed=42)
+        assert ds1.filepaths_and_text == ds2.filepaths_and_text
+
 
 # ---------------------------------------------------------------------------
 # TextMelDataset.get_durations
@@ -524,19 +575,21 @@ class TestGetDurations:
         assert durs.tolist() == saved.tolist()
         assert len(durs) == len(text)
 
-    def test_length_mismatch_raises_assertion(self, tmp_path):
+    def test_length_mismatch_raises_value_error(self, tmp_path):
+        """Length mismatch must raise ValueError (not a bare assert, which is
+        disabled under python -O)."""
         wav_path, dur_path = self._layout(tmp_path)
         ds, text = self._text_tensor(tmp_path)
         np.save(dur_path, np.array([1, 2, 3]))  # 3 != 7
 
-        with pytest.raises(AssertionError, match="do not match"):
+        with pytest.raises(ValueError, match="do not match"):
             ds.get_durations(str(wav_path), text)
 
     def test_missing_npy_raises_with_guidance(self, tmp_path):
         wav_path, _ = self._layout(tmp_path)  # .npy intentionally not written
         ds, text = self._text_tensor(tmp_path)
 
-        with pytest.raises(FileNotFoundError, match="make sure you've generate the durations"):
+        with pytest.raises(FileNotFoundError, match="make sure you've generated the durations"):
             ds.get_durations(str(wav_path), text)
 
 

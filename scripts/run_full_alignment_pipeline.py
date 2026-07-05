@@ -194,7 +194,13 @@ def run_julius_alignment(wav_dir: Path, output_dir: Path, num_workers: int = 16)
 
 def main():
     parser = argparse.ArgumentParser(description="Full Julius alignment pipeline")
-    parser.add_argument("--filelist", type=str, nargs="+", required=True)
+    parser.add_argument(
+        "--filelist",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Filelist paths: train [val] (format: wav_path|speaker_id|text). At most 2.",
+    )
     parser.add_argument("--output-dir", type=str, default="data/julius_work")
     parser.add_argument("--pt-output-dir", type=str, default="data/jvs_precomputed_aligned")
     parser.add_argument("--mel-mean", type=float, default=-6.550095)
@@ -210,6 +216,11 @@ def main():
         help="Force rebuild text cache even if exists",
     )
     args = parser.parse_args()
+
+    # Step 4 maps filelist[0] -> train/ and filelist[1] -> val/; extra
+    # filelists would be silently ignored there, so reject them up front.
+    if len(args.filelist) > 2:
+        parser.error(f"--filelist accepts at most 2 filelists (train [val]), got {len(args.filelist)}")
 
     work_dir = Path(args.output_dir)
     wav_dir = work_dir / "wav"

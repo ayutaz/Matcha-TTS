@@ -28,23 +28,32 @@ def resolve_model_path(model_path, quantized):
 
     When --quantized is passed, looks for a *_int8.onnx file derived from
     the given model path.  These files are produced by
-    ``python -m matcha.onnx.export --quantize``.
+    ``python -m matcha.onnx.export --quantize``.  A path that already names
+    a quantized model (*_int8.onnx) is used as-is; if only the given path
+    exists, it is used with a warning.
 
     Returns the resolved path as a string.
     """
     model_path = Path(model_path)
 
     if quantized:
-        # Explicitly requested: derive the _int8 path from the given model
+        if model_path.stem.endswith("_int8"):
+            # The given path already points at a quantized model
+            print(f"[+] Loading INT8 quantized model: {model_path}")
+            return str(model_path)
+        # Derive the _int8 path from the given model
         int8_path = model_path.with_name(model_path.stem + "_int8.onnx")
         if int8_path.exists():
             print(f"[+] Loading INT8 quantized model: {int8_path}")
             return str(int8_path)
-        else:
-            raise FileNotFoundError(
-                f"Quantized model not found at {int8_path}. "
-                f"Generate one with: python -m matcha.onnx.export --quantize <checkpoint> {model_path}"
-            )
+        if model_path.exists():
+            warn = f"[!] Quantized model not found at {int8_path}; falling back to {model_path}"
+            warnings.warn(warn, UserWarning)
+            return str(model_path)
+        raise FileNotFoundError(
+            f"Quantized model not found at {int8_path}. "
+            f"Generate one with: python -m matcha.onnx.export --quantize <checkpoint> {model_path}"
+        )
 
     return str(model_path)
 
@@ -125,7 +134,7 @@ def write_mels(model, inputs, output_dir, original_indices=None):
         out_idx = original_indices[i] if original_indices is not None else i
         output_stem = output_dir.joinpath(f"output_{out_idx + 1}")
         plot_spectrogram_to_numpy(mel.squeeze(), output_stem.with_suffix(".png"))
-        np.save(output_stem.with_suffix(".numpy"), mel)
+        np.save(output_stem.with_suffix(".npy"), mel)
 
     wav_secs = (mel_lengths * 256).sum() / 22050
     print(f"Inference seconds: {infer_secs}")

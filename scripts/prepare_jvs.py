@@ -40,7 +40,9 @@ def trim_silence(waveform, sample_rate, top_db=30, margin_ms=50):
     Returns:
         Trimmed waveform tensor
     """
-    audio = waveform.squeeze(0)  # (samples,)
+    # Detect energy on the channel mean so multi-channel input is handled
+    # correctly (squeeze(0) would leave (C, N) and break the framing below).
+    audio = waveform.mean(dim=0)  # (samples,)
     if audio.numel() == 0:
         return waveform
 
@@ -92,11 +94,9 @@ def resample_audio(
         julius_sr: Sample rate for Julius output (default 16000).
     """
     data, sr = sf.read(input_path, dtype="float32")
-    if data.ndim == 1:
-        data = data[None, :]  # (1, samples)
-    else:
-        data = data.T  # (channels, samples)
-    waveform = torch.from_numpy(data)
+    if data.ndim > 1:
+        data = data.mean(axis=1)  # downmix to mono (JVS is mono; fail-safe for stereo input)
+    waveform = torch.from_numpy(data[None, :])  # (1, samples)
     if sr != orig_sr:
         orig_sr = sr
     if orig_sr != target_sr:
@@ -293,6 +293,14 @@ def main():
         print(f"[!] {len(resample_errors)} resampling error(s):")
         for path, msg in resample_errors:
             print(f"  {path}: {msg}")
+        # Drop filelist entries whose output wav was never written
+        src_to_dst = {task[0]: task[1] for task in resample_tasks}
+        failed_dsts = {str(Path(src_to_dst[src]).resolve()) for src, _ in resample_errors}
+        before = len(filelist)
+        filelist = [entry for entry in filelist if entry.split("|", 1)[0] not in failed_dsts]
+        print(f"[!] Dropped {before - len(filelist)} filelist entries referencing failed resamples")
+        if not filelist:
+            raise RuntimeError("All resamples failed; no valid utterances remain.")
 
     # Phase 3 (optional): Generate hiragana text files for Julius alignment
     if julius_dir:

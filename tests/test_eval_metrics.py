@@ -7,14 +7,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-
-UTF8_XFAIL = pytest.mark.xfail(
-    sys.platform == "win32",
-    strict=False,
-    reason="read_text()/write_text() without encoding='utf-8' uses cp932 on Windows; pins the missing-encoding bug",
-)
 
 
 class TestEvalDurationAccuracy:
@@ -51,6 +46,54 @@ class TestEvalDurationAccuracy:
         results = load_predicted_durations(tmp_path)
         assert len(results) == 1
         assert results[0]["durations"] == [0, 5, 0, 10, 0]
+
+    def test_main_without_gt_dir_returns_1(self, tmp_path):
+        from eval_duration_accuracy import main
+
+        (tmp_path / "spk_000").mkdir()
+        pred = {"predicted_durations": [0, 5, 0, 10, 0], "speaker_id": 0}
+        (tmp_path / "spk_000" / "text_00_dur.json").write_text(json.dumps(pred), encoding="utf-8")
+
+        assert main(["--pred-dir", str(tmp_path)]) == 1
+
+    def test_main_computes_accuracy_over_pairs(self, tmp_path):
+        """main() runs compute_accuracy over prediction/ground-truth pairs and reports real metrics."""
+        from eval_duration_accuracy import main
+
+        pred_dir = tmp_path / "pred"
+        gt_dir = tmp_path / "gt"
+        (pred_dir / "spk_000").mkdir(parents=True)
+        (gt_dir / "spk_000").mkdir(parents=True)
+
+        pred = {"predicted_durations": [0, 5, 0, 10, 0, 3, 0], "speaker_id": 0}
+        gt = {"durations": [0, 6, 0, 9, 0, 4, 0]}
+        (pred_dir / "spk_000" / "text_00_dur.json").write_text(json.dumps(pred), encoding="utf-8")
+        (gt_dir / "spk_000" / "text_00_dur.json").write_text(json.dumps(gt), encoding="utf-8")
+
+        output = tmp_path / "report" / "duration_accuracy.json"
+        rc = main(["--pred-dir", str(pred_dir), "--gt-dir", str(gt_dir), "--output", str(output)])
+        assert rc == 0
+
+        report = json.loads(output.read_text(encoding="utf-8"))
+        assert report["status"] == "complete"
+        assert report["n_pairs"] == 1
+        # Phoneme positions: pred [5, 10, 3] vs gt [6, 9, 4] -> MAE = RMSE = 1.0
+        assert report["mae_mean"] == pytest.approx(1.0)
+        assert report["rmse_mean"] == pytest.approx(1.0)
+        assert report["per_file"][0]["mae"] == pytest.approx(1.0)
+
+    def test_main_no_pairs_returns_1(self, tmp_path):
+        """Predictions without matching ground-truth files yield exit code 1, not a fake report."""
+        from eval_duration_accuracy import main
+
+        pred_dir = tmp_path / "pred"
+        gt_dir = tmp_path / "gt"
+        (pred_dir / "spk_000").mkdir(parents=True)
+        gt_dir.mkdir()
+        pred = {"predicted_durations": [0, 5, 0, 10, 0], "speaker_id": 0}
+        (pred_dir / "spk_000" / "text_00_dur.json").write_text(json.dumps(pred), encoding="utf-8")
+
+        assert main(["--pred-dir", str(pred_dir), "--gt-dir", str(gt_dir)]) == 1
 
 
 class TestComputeAccuracy:
@@ -115,7 +158,6 @@ class TestDurJsonUtf8Loading:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-    @UTF8_XFAIL
     def test_japanese_text_field_utf8(self, tmp_path):
         from eval_degeneration_rate import load_durations_from_json
         from eval_duration_accuracy import load_predicted_durations
@@ -277,6 +319,157 @@ class TestEvalMCD:
 
         assert main(["--synth-dir", str(tmp_path / "does_not_exist")]) == 1
 
+    def test_main_without_ref_dir_returns_1(self, tmp_path):
+        from eval_mcd import main
+
+        np.save(tmp_path / "text_00.npy", np.zeros((10, 13)))
+        assert main(["--synth-dir", str(tmp_path)]) == 1
+
+    def test_main_computes_mcd_over_pairs(self, tmp_path):
+        """main() runs compute_mcd over synth/ref pairs and reports real metrics."""
+        from eval_mcd import main
+
+        synth_dir = tmp_path / "synth"
+        ref_dir = tmp_path / "ref"
+        (synth_dir / "spk_000").mkdir(parents=True)
+        (ref_dir / "spk_000").mkdir(parents=True)
+
+        # Every frame differs in exactly one coefficient by d -> MCD = coeff * d
+        d = 1.5
+        synth = np.zeros((10, 13))
+        synth[:, 0] = d
+        np.save(synth_dir / "spk_000" / "text_00.npy", synth)
+        np.save(ref_dir / "spk_000" / "text_00.npy", np.zeros((10, 13)))
+        # Unpaired synth file is skipped, not silently folded into the mean
+        np.save(synth_dir / "spk_000" / "text_01.npy", synth)
+
+        output = tmp_path / "report" / "mcd.json"
+        rc = main(["--synth-dir", str(synth_dir), "--ref-dir", str(ref_dir), "--output", str(output)])
+        assert rc == 0
+
+        report = json.loads(output.read_text(encoding="utf-8"))
+        assert report["status"] == "complete"
+        assert report["n_files"] == 2
+        assert report["n_pairs"] == 1
+        assert report["n_skipped"] == 1
+        expected = (10.0 * math.sqrt(2.0) / math.log(10.0)) * d
+        assert report["mcd_mean"] == pytest.approx(expected)
+
+    def test_main_handles_batched_mel_layout(self, tmp_path):
+        """(1, 80, T) mels as saved by generate_eval_samples are aligned frame-wise."""
+        from eval_mcd import main
+
+        synth_dir = tmp_path / "synth"
+        ref_dir = tmp_path / "ref"
+        synth_dir.mkdir()
+        ref_dir.mkdir()
+
+        mel = np.random.randn(1, 80, 50)
+        np.save(synth_dir / "text_00.npy", mel)
+        np.save(ref_dir / "text_00.npy", mel)
+
+        output = tmp_path / "mcd.json"
+        rc = main(["--synth-dir", str(synth_dir), "--ref-dir", str(ref_dir), "--output", str(output)])
+        assert rc == 0
+        report = json.loads(output.read_text(encoding="utf-8"))
+        assert report["mcd_mean"] == pytest.approx(0.0)
+
+    def test_main_no_pairs_returns_1(self, tmp_path):
+        from eval_mcd import main
+
+        synth_dir = tmp_path / "synth"
+        ref_dir = tmp_path / "ref"
+        synth_dir.mkdir()
+        ref_dir.mkdir()
+        np.save(synth_dir / "text_00.npy", np.zeros((10, 13)))
+
+        assert main(["--synth-dir", str(synth_dir), "--ref-dir", str(ref_dir)]) == 1
+
+
+class TestEvalUTMOS:
+    @staticmethod
+    def _write_wav(path, n_samples=1600, sr=16000):
+        import soundfile as sf
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(path), np.zeros(n_samples, dtype=np.float32), sr)
+
+    def test_main_missing_dir(self, tmp_path):
+        from eval_utmos import main
+
+        assert main(["--wav-dir", str(tmp_path / "does_not_exist")]) == 1
+
+    def test_main_empty_dir_returns_1(self, tmp_path):
+        from eval_utmos import main
+
+        assert main(["--wav-dir", str(tmp_path)]) == 1
+
+    def test_main_scores_wavs_via_torch_hub(self, tmp_path, monkeypatch):
+        """main() loads the UTMOS predictor from torch.hub and scores every wav."""
+        from eval_utmos import main
+
+        self._write_wav(tmp_path / "wavs" / "spk_000" / "text_00.wav")
+        self._write_wav(tmp_path / "wavs" / "spk_000" / "text_01.wav")
+
+        hub_calls = []
+
+        def fake_hub_load(repo, model, **kwargs):
+            hub_calls.append((repo, model))
+
+            def predictor(wave, sr):
+                assert wave.ndim == 2  # (batch, samples)
+                return torch.tensor([3.5])
+
+            return predictor
+
+        monkeypatch.setattr(torch.hub, "load", fake_hub_load)
+
+        output = tmp_path / "report" / "utmos.json"
+        rc = main(["--wav-dir", str(tmp_path / "wavs"), "--output", str(output)])
+        assert rc == 0
+        assert hub_calls == [("tarepan/SpeechMOS:v1.2.0", "utmos22_strong")]
+
+        report = json.loads(output.read_text(encoding="utf-8"))
+        assert report["status"] == "complete"
+        assert report["n_wav_files"] == 2
+        assert len(report["per_file"]) == 2
+        assert report["utmos_mean"] == pytest.approx(3.5)
+        assert report["utmos_std"] == pytest.approx(0.0)
+
+    def test_main_scores_baseline_dir(self, tmp_path, monkeypatch):
+        from eval_utmos import main
+
+        self._write_wav(tmp_path / "wavs" / "text_00.wav")
+        self._write_wav(tmp_path / "baseline" / "text_00.wav")
+
+        monkeypatch.setattr(torch.hub, "load", lambda *a, **kw: lambda wave, sr: torch.tensor([4.0]))
+
+        output = tmp_path / "utmos.json"
+        rc = main(
+            [
+                "--wav-dir",
+                str(tmp_path / "wavs"),
+                "--baseline-dir",
+                str(tmp_path / "baseline"),
+                "--output",
+                str(output),
+            ]
+        )
+        assert rc == 0
+        report = json.loads(output.read_text(encoding="utf-8"))
+        assert report["baseline_utmos_mean"] == pytest.approx(4.0)
+
+    def test_main_hub_load_failure_returns_1(self, tmp_path, monkeypatch):
+        from eval_utmos import main
+
+        self._write_wav(tmp_path / "text_00.wav")
+
+        def broken_hub_load(*args, **kwargs):
+            raise RuntimeError("no network")
+
+        monkeypatch.setattr(torch.hub, "load", broken_hub_load)
+        assert main(["--wav-dir", str(tmp_path)]) == 1
+
 
 class TestEvalReport:
     def test_generate_empty_report(self, tmp_path):
@@ -329,7 +522,6 @@ class TestEvalReport:
         report = json.loads(default_output.read_text(encoding="utf-8"))
         assert report["degeneration"]["degenerate_rate"] == 0.1
 
-    @UTF8_XFAIL
     def test_japanese_metric_json_roundtrip(self, tmp_path):
         from generate_eval_report import generate_report, main
 
@@ -547,3 +739,22 @@ class TestAnalyzeABTest:
         pairs_path = tmp_path / "pairs.json"
         pairs_path.write_text(json.dumps([]), encoding="utf-8")
         assert main(["--results", str(tmp_path / "missing.json"), "--pairs", str(pairs_path)]) == 1
+
+    def test_length_mismatch_raises(self):
+        """results/pairs of different lengths must not be silently zip-truncated."""
+        from analyze_ab_test import analyze_results
+
+        results = [{"choice": "A"}] * 5
+        pairs = [{"A_is": "julius", "B_is": "mas"}] * 3
+        with pytest.raises(ValueError, match="length mismatch"):
+            analyze_results(results, pairs)
+
+    def test_main_length_mismatch_returns_1(self, tmp_path):
+        from analyze_ab_test import main
+
+        results_path = tmp_path / "results.json"
+        pairs_path = tmp_path / "pairs.json"
+        results_path.write_text(json.dumps([{"choice": "A"}] * 2), encoding="utf-8")
+        pairs_path.write_text(json.dumps([{"A_is": "julius", "B_is": "mas"}]), encoding="utf-8")
+
+        assert main(["--results", str(results_path), "--pairs", str(pairs_path)]) == 1

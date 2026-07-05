@@ -357,15 +357,29 @@ class TestAlignJuliusWithPyopenjtalk:
         result = align_julius_with_pyopenjtalk(["sil", "a", "sil"], [], [5, 10, 5])
         assert result == []
 
-    def test_question_mark_prosody(self):
-        """? prosody marker gets duration=0."""
+    def test_question_mark_gets_final_sil_duration(self):
+        """? (interrogative-final sil from japanese_cleaners) gets the last
+        Julius sil duration, exactly like $."""
         julius_ph = ["sil", "a", "sil"]
         julius_dur = [5, 10, 5]
 
         pyopenjtalk_ph = ["^", "a", "?"]
         result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur)
 
-        assert result[2] == 0  # ?
+        assert result == [5, 10, 5]
+
+    def test_question_mark_sequential_matches_dollar(self):
+        """Sequential mode: an interrogative sequence gets the same durations
+        as its declarative counterpart (regression: ? used to get 0 and the
+        final-sil frames were dumped onto the last real phoneme)."""
+        julius_ph = ["sil", "k", "a", "sil"]
+        julius_dur = [5, 3, 4, 6]
+
+        result_q = align_julius_with_pyopenjtalk(julius_ph, ["^", "k", "a", "?"], julius_dur, align_mode="sequential")
+        result_d = align_julius_with_pyopenjtalk(julius_ph, ["^", "k", "a", "$"], julius_dur, align_mode="sequential")
+
+        assert result_q == [5, 3, 4, 6]
+        assert result_q == result_d
 
 
 # ===========================================================================
@@ -408,7 +422,7 @@ class TestAlignDTW:
         assert result[3] == 0
 
     def test_dtw_handles_extra_julius_phoneme(self):
-        """DTW handles an extra phoneme in Julius not in pyopenjtalk."""
+        """DTW folds an extra Julius phoneme's duration into its left neighbor."""
         julius_ph = ["sil", "k", "o", "r", "i", "sil"]
         julius_dur = [5, 4, 3, 2, 4, 5]
 
@@ -420,14 +434,69 @@ class TestAlignDTW:
         assert len(result) == len(pyopenjtalk_ph)
         assert result[0] == 5  # ^
         assert result[1] == 4  # k
-        assert result[2] == 3  # o
+        assert result[2] == 5  # o (3) + unmatched r (2) assigned locally
         assert result[3] == 4  # i
         assert result[4] == 5  # $
+        # No Julius frames are lost
+        assert sum(result) == sum(julius_dur)
 
     def test_dtw_empty_pyopenjtalk(self):
         """DTW returns empty for empty pyopenjtalk."""
         result = align_julius_with_pyopenjtalk_dtw(["sil", "a", "sil"], [], [5, 10, 5])
         assert result == []
+
+    def test_dtw_question_mark_matches_final_sil(self):
+        """DTW: ? (interrogative-final sil) matches the last Julius sil
+        (regression: ? was skipped as prosody-only and got duration=0)."""
+        julius_ph = ["sil", "k", "a", "sil"]
+        julius_dur = [5, 3, 4, 6]
+
+        result = align_julius_with_pyopenjtalk_dtw(julius_ph, ["^", "k", "a", "?"], julius_dur)
+
+        assert result == [5, 3, 4, 6]
+        assert sum(result) == sum(julius_dur)
+
+    def test_dtw_many_to_one_sums_durations_locally(self):
+        """Many-to-one: durations of Julius phones consumed by one pyopenjtalk
+        phone are summed onto that phone, not re-added globally elsewhere."""
+        # Julius split "k" into two segments (4 + 2 frames)
+        julius_ph = ["sil", "k", "k", "o", "sil"]
+        julius_dur = [5, 4, 2, 3, 5]
+
+        pyopenjtalk_ph = ["^", "k", "o", "$"]
+        result = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
+
+        # Hand-computed: ^=sil(5), k=k(4)+k(2)=6, o=o(3), $=sil(5)
+        assert result == [5, 6, 3, 5]
+        assert sum(result) == sum(julius_dur)
+
+    def test_dtw_many_to_one_three_segments(self):
+        """Three Julius segments collapsing onto one pyopenjtalk phone all
+        contribute their duration to that phone."""
+        # Julius produced "a a a" for a single long "a" (e.g. a: split up)
+        julius_ph = ["sil", "a", "a", "a", "n", "sil"]
+        julius_dur = [5, 3, 4, 2, 6, 5]
+
+        pyopenjtalk_ph = ["^", "a", "n", "$"]
+        result = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
+
+        # Hand-computed: ^=5, a=3+4+2=9, n=6, $=5
+        assert result == [5, 9, 6, 5]
+        assert sum(result) == sum(julius_dur)
+
+    def test_dtw_unmatched_pau_assigned_locally(self):
+        """A Julius pau with no pyopenjtalk `_` goes to the preceding phone,
+        not to the globally last non-zero phone."""
+        julius_ph = ["sil", "a", "pau", "i", "sil"]
+        julius_dur = [5, 3, 10, 4, 5]
+
+        # pyopenjtalk has no "_" for this pause
+        pyopenjtalk_ph = ["^", "a", "i", "$"]
+        result = align_julius_with_pyopenjtalk_dtw(julius_ph, pyopenjtalk_ph, julius_dur)
+
+        # Hand-computed: pau(10) folds into the preceding "a": 3+10=13
+        assert result == [5, 13, 4, 5]
+        assert sum(result) == sum(julius_dur)
 
 
 # ===========================================================================

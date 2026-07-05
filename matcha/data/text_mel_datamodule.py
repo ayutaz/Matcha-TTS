@@ -174,8 +174,8 @@ class TextMelDataset(torch.utils.data.Dataset):
             self.data_parameters = data_parameters
         else:
             self.data_parameters = {"mel_mean": 0, "mel_std": 1}
-        random.seed(seed)
-        random.shuffle(self.filepaths_and_text)
+        # Local RNG: never reseed the global random module (process-wide side effect)
+        random.Random(seed).shuffle(self.filepaths_and_text)
 
     def get_datapoint(self, filepath_and_text):
         if self.n_spks > 1:
@@ -205,10 +205,11 @@ class TextMelDataset(torch.utils.data.Dataset):
 
         except FileNotFoundError as e:
             raise FileNotFoundError(
-                f"Tried loading the durations but durations didn't exist at {dur_loc}, make sure you've generate the durations first using: python matcha/utils/get_durations_from_trained_model.py \n"
+                f"Tried loading the durations but durations didn't exist at {dur_loc}, make sure you've generated the durations first using: python matcha/utils/get_durations_from_trained_model.py \n"
             ) from e
 
-        assert len(durs) == len(text), f"Length of durations {len(durs)} and text {len(text)} do not match"
+        if len(durs) != len(text):
+            raise ValueError(f"Length of durations {len(durs)} and text {len(text)} do not match")
 
         return durs
 
@@ -229,9 +230,11 @@ class TextMelDataset(torch.utils.data.Dataset):
         mel = normalize(mel, self.data_parameters["mel_mean"], self.data_parameters["mel_std"])
         return mel
 
-    def get_text(self, text, add_blank=True):
+    def get_text(self, text, add_blank=None):
+        if add_blank is None:
+            add_blank = self.add_blank
         text_norm, cleaned_text = text_to_sequence(text, self.cleaners, language=self.language)
-        if self.add_blank:
+        if add_blank:
             text_norm = intersperse(text_norm, 0)
         text_norm = torch.IntTensor(text_norm)
         return text_norm, cleaned_text

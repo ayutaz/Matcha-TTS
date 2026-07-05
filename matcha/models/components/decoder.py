@@ -16,9 +16,14 @@ class SinusoidalPosEmb(torch.nn.Module):
         super().__init__()
         self.dim = dim
         assert self.dim % 2 == 0, "SinusoidalPosEmb requires dim to be even"
+        assert self.dim >= 4, "SinusoidalPosEmb requires dim >= 4 (dim=2 makes half_dim - 1 zero)"
         self.half_dim = dim // 2
         self.emb_coeff = math.log(10000) / (self.half_dim - 1)
-        self.register_buffer("emb_weights", torch.exp(torch.arange(self.half_dim).float() * -self.emb_coeff))
+        # persistent=False: rebuilt at construction, matching the RoPE caches in the text
+        # encoder, so checkpoints saved before this cache existed still load strictly
+        self.register_buffer(
+            "emb_weights", torch.exp(torch.arange(self.half_dim).float() * -self.emb_coeff), persistent=False
+        )
 
     def forward(self, x, scale=1000):
         if x.ndim < 1:

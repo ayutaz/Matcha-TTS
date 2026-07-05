@@ -85,6 +85,10 @@ class TestParseFilelist:
 class TestProcessSampleWithDuration:
     """process_sample()のduration統合テスト（@pytest.mark.slow -- wav生成+mel計算が必要）"""
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyopenjtalk(self):
+        pytest.importorskip("pyopenjtalk")
+
     @pytest.mark.slow
     def test_pt_contains_durations_key(self, tmp_path):
         """durations_dir指定時に.ptにdurationsキーが含まれること"""

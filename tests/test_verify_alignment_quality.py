@@ -152,9 +152,11 @@ class TestClassifyPhoneme:
         assert classify_phoneme("sil") == "silence"
         assert classify_phoneme("^") == "silence"
         assert classify_phoneme("$") == "silence"
+        # ? = interrogative-final sil (carries duration, unlike prosody markers)
+        assert classify_phoneme("?") == "silence"
 
     def test_prosody(self):
-        for p in ["#", "[", "]", "?"]:
+        for p in ["#", "[", "]"]:
             assert classify_phoneme(p) == "prosody"
 
     def test_consonant(self):

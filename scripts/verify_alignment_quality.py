@@ -36,8 +36,8 @@ _VOWELS = {"a", "i", "u", "e", "o", "A", "I", "U", "E", "O"}
 _HATSUON = {"N"}
 _SOKUON = {"cl"}
 _PAUSE = {"pau", "_"}
-_SILENCE = {"sil", "^", "$"}
-_PROSODY = {"#", "[", "]", "?"}
+_SILENCE = {"sil", "^", "$", "?"}  # ? = interrogative-final sil (carries duration)
+_PROSODY = {"#", "[", "]"}
 
 
 def classify_phoneme(sym: str) -> str:

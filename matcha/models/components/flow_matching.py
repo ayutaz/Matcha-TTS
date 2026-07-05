@@ -87,8 +87,9 @@ class BASECFM(torch.nn.Module, ABC):
 
     def solve_midpoint(self, x, t_span, mu, mask, spks, cond):
         """
-        Midpoint (Heun) solver for ODEs. Provides better accuracy per step than Euler,
-        allowing fewer total steps for comparable quality.
+        Explicit midpoint (RK2) solver for ODEs: evaluates the vector field at the
+        interval midpoint and takes the full step with that slope. Provides better
+        accuracy per step than Euler, allowing fewer total steps for comparable quality.
         Args:
             x (torch.Tensor): random noise
             t_span (torch.Tensor): n_timesteps interpolated

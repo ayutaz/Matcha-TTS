@@ -25,6 +25,7 @@ Output:
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import tempfile
@@ -108,7 +109,14 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
         for name, txt_path in txt_files:
             (wav_dir / f"{name}.txt").symlink_to(Path(txt_path).resolve())
 
-        # Run segment_julius.pl from the temp directory
+        # Run segment_julius.pl from the temp directory.
+        # PATH: segkit bin/ first, then julius's directory (only when resolvable),
+        # then the standard Linux locations.
+        julius_exe = shutil.which("julius")
+        path_dirs = [str(segkit_path / "bin")]
+        if julius_exe:
+            path_dirs.append(str(Path(julius_exe).parent))
+        path_dirs += ["/usr/bin", "/bin", "/usr/local/bin"]
         try:
             result = subprocess.run(
                 ["perl", str(segkit_path / "segment_julius.pl")],
@@ -117,7 +125,7 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
                 text=True,
                 timeout=timeout,
                 env={
-                    "PATH": f"{segkit_path / 'bin'}:{shutil.which('julius') and str(Path(shutil.which('julius')).parent)}:/usr/bin:/bin:/usr/local/bin",
+                    "PATH": os.pathsep.join(path_dirs),
                     "HOME": str(Path.home()),
                 },
                 check=False,

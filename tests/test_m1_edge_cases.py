@@ -217,10 +217,11 @@ class TestAbnormalProsodyPatterns:
         assert result[7] == 0
         # a -> 5
         assert result[8] == 5
-        # ? -> 0
-        assert result[9] == 0
-        # $ -> silE duration
-        assert result[10] == 10
+        # ? (interrogative end) -> silE duration, consuming the final sil
+        assert result[9] == 10
+        # $ -> 0 (final sil already consumed by ?; real pyopenjtalk output
+        # ends with either ? or $, never both)
+        assert result[10] == 0
 
     def test_triple_consecutive_prosody(self):
         """Three consecutive prosody symbols (] # [) all get duration=0."""
@@ -259,14 +260,14 @@ class TestAbnormalProsodyPatterns:
         assert result == [10, 5, 5, 10]
 
     def test_question_mark_at_end(self):
-        """? at utterance end (question intonation) gets duration=0."""
+        """? at utterance end (question intonation) gets the silE duration like $."""
         julius_ph = ["sil", "k", "a", "sil"]
         julius_dur = [10, 5, 5, 10]
         pyopenjtalk_ph = ["^", "k", "a", "?"]
 
         result = align_julius_with_pyopenjtalk(julius_ph, pyopenjtalk_ph, julius_dur)
         assert len(result) == 4
-        assert result[3] == 0  # ? always 0
+        assert result[3] == 10  # ? -> final sil (silE) duration
 
     def test_prosody_only_utterance(self):
         """Utterance with only ^ and $ (no real phonemes)."""

@@ -4,9 +4,8 @@ The benefit of this abstraction is that all the logic outside of model definitio
 """
 
 from abc import ABC
-from typing import Any, Dict
+from typing import Any
 
-import hydra
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
@@ -36,12 +35,12 @@ def build_warmup_cosine_scheduler(optimizer, scheduler_cfg):
             eta_min (float): Minimum lr for cosine decay (default 5e-5).
 
     Returns:
-        A SequentialLR scheduler and the step interval string.
+        A SequentialLR scheduler (stepped per training step by the caller).
     """
-    warmup_steps = int(getattr(scheduler_cfg, "warmup_steps", 500))
-    start_factor = float(getattr(scheduler_cfg, "start_factor", 0.1))
-    T_max = int(getattr(scheduler_cfg, "T_max", 20000))
-    eta_min = float(getattr(scheduler_cfg, "eta_min", 5e-5))
+    warmup_steps = int(_cfg_get(scheduler_cfg, "warmup_steps", 500))
+    start_factor = float(_cfg_get(scheduler_cfg, "start_factor", 0.1))
+    T_max = int(_cfg_get(scheduler_cfg, "T_max", 20000))
+    eta_min = float(_cfg_get(scheduler_cfg, "eta_min", 5e-5))
 
     warmup = torch.optim.lr_scheduler.LinearLR(
         optimizer,
@@ -140,6 +139,16 @@ class BaseLightningClass(LightningModule, ABC):
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         self.ckpt_loaded_epoch = checkpoint["epoch"]  # pylint: disable=attribute-defined-outside-init
+        # SinusoidalPosEmb.emb_weights is a non-persistent buffer (rebuilt at construction),
+        # but checkpoints saved before persistent=False carry the key; strip it so
+        # strict loading works for both checkpoint generations. EMA checkpoints
+        # (WeightAveraging) hold a second full copy under "current_model_state" that
+        # the callback strict-loads after this hook runs, so strip it there too.
+        for payload_name in ("state_dict", "current_model_state"):
+            state_dict = checkpoint.get(payload_name)
+            if state_dict is not None:
+                for key in [k for k in state_dict if k.endswith("time_embeddings.emb_weights")]:
+                    del state_dict[key]
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)

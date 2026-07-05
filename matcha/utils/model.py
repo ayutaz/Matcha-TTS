@@ -57,7 +57,7 @@ def normalize(data, mu, std):
         elif isinstance(mu, torch.Tensor):
             mu = mu.to(data.device)
         elif isinstance(mu, np.ndarray):
-            mu = torch.from_numpy(mu).to(data.device)
+            mu = torch.from_numpy(mu).to(device=data.device, dtype=data.dtype)
         mu = mu.unsqueeze(-1)
 
     if not isinstance(std, (float, int)):
@@ -66,29 +66,29 @@ def normalize(data, mu, std):
         elif isinstance(std, torch.Tensor):
             std = std.to(data.device)
         elif isinstance(std, np.ndarray):
-            std = torch.from_numpy(std).to(data.device)
+            std = torch.from_numpy(std).to(device=data.device, dtype=data.dtype)
         std = std.unsqueeze(-1)
 
     return (data - mu) / std
 
 
 def denormalize(data, mu, std):
-    if not isinstance(mu, float):
+    if not isinstance(mu, (float, int)):
         if isinstance(mu, list):
             mu = torch.tensor(mu, dtype=data.dtype, device=data.device)
         elif isinstance(mu, torch.Tensor):
             mu = mu.to(data.device)
         elif isinstance(mu, np.ndarray):
-            mu = torch.from_numpy(mu).to(data.device)
+            mu = torch.from_numpy(mu).to(device=data.device, dtype=data.dtype)
         mu = mu.unsqueeze(-1)
 
-    if not isinstance(std, float):
+    if not isinstance(std, (float, int)):
         if isinstance(std, list):
             std = torch.tensor(std, dtype=data.dtype, device=data.device)
         elif isinstance(std, torch.Tensor):
             std = std.to(data.device)
         elif isinstance(std, np.ndarray):
-            std = torch.from_numpy(std).to(data.device)
+            std = torch.from_numpy(std).to(device=data.device, dtype=data.dtype)
         std = std.unsqueeze(-1)
 
     return data * std + mu

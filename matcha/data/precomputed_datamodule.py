@@ -22,6 +22,12 @@ class BucketBatchSampler(Sampler):
     Samples are sorted by file size into buckets, then batches are drawn from
     within each bucket.  Bucket order is shuffled each epoch so that training
     remains stochastic while individual batches contain similarly-sized items.
+
+    Epoch semantics: Lightning drives ``set_epoch`` at the start of every training
+    epoch (it reaches this sampler through the ``.sampler`` attribute exposed below),
+    which keeps the shuffle schedule correct across checkpoint resumes.  When nobody
+    calls ``set_epoch`` (manual iteration), the epoch auto-advances as a fallback so
+    repeated iteration still reshuffles.
     """
 
     def __init__(
@@ -31,6 +37,12 @@ class BucketBatchSampler(Sampler):
         self.drop_last = drop_last
         self.seed = seed
         self.epoch = 0
+        self._epoch_set_externally = False
+        self._iterated = False
+        # Mirror torch's BatchSampler interface: Lightning's _set_sampler_epoch only
+        # inspects dataloader.sampler and dataloader.batch_sampler.sampler, so expose
+        # ourselves as `.sampler` to receive set_epoch calls.
+        self.sampler = self
 
         # Sort indices by file size (proxy for mel length)
         sorted_indices = sorted(range(len(file_sizes)), key=lambda i: file_sizes[i])
@@ -43,9 +55,22 @@ class BucketBatchSampler(Sampler):
             if bucket:
                 self.buckets.append(bucket)
 
+    def set_epoch(self, epoch: int):
+        """Set the epoch for deterministic shuffling (called by Lightning each epoch)."""
+        self.epoch = epoch
+        self._epoch_set_externally = True
+
+    def _advance_epoch(self):
+        """Fallback: auto-advance the epoch only when set_epoch was not called since
+        the previous iteration, so external drivers can never double-advance."""
+        if self._iterated and not self._epoch_set_externally:
+            self.epoch += 1
+        self._iterated = True
+        self._epoch_set_externally = False
+
     def __iter__(self):
+        self._advance_epoch()
         rng = random.Random(self.seed + self.epoch)
-        self.epoch += 1
 
         # Build batches within each bucket, then shuffle bucket order
         all_batches = []
@@ -79,6 +104,11 @@ class DistributedBucketBatchSampler(Sampler):
 
     The deterministic shuffling logic mirrors ``torch.utils.data.DistributedSampler``
     so that all ranks agree on the global permutation before splitting.
+
+    Epoch semantics match ``BucketBatchSampler``: ``set_epoch`` (driven by Lightning
+    through the exposed ``.sampler`` attribute) always wins; the internal auto-advance
+    in ``__iter__`` is only a fallback for manual iteration, so a stray extra iteration
+    on one rank is resynchronized by the next external ``set_epoch`` call.
     """
 
     def __init__(
@@ -99,6 +129,10 @@ class DistributedBucketBatchSampler(Sampler):
         self.drop_last = drop_last
         self.seed = seed
         self.epoch = 0
+        self._epoch_set_externally = False
+        self._iterated = False
+        # See BucketBatchSampler: lets Lightning's _set_sampler_epoch reach set_epoch.
+        self.sampler = self
 
         self.total_size = len(file_sizes)
         # Pad total to be evenly divisible by num_replicas (same as DistributedSampler)
@@ -106,6 +140,8 @@ class DistributedBucketBatchSampler(Sampler):
         self.padded_total = self.num_samples * self.num_replicas
 
     def __iter__(self):
+        self._advance_epoch()
+
         # --- 1. Deterministic global shuffle (identical across all ranks) ---
         rng = random.Random(self.seed + self.epoch)
         indices = list(range(self.total_size))
@@ -134,7 +170,6 @@ class DistributedBucketBatchSampler(Sampler):
         # Use rank-specific RNG for intra-bucket shuffle so each rank sees
         # a different batch ordering while keeping the global split deterministic.
         epoch_rng = random.Random(self.seed + self.epoch + self.rank)
-        self.epoch += 1
 
         all_batches = []
         for bucket in buckets:
@@ -155,8 +190,17 @@ class DistributedBucketBatchSampler(Sampler):
         return (self.num_samples + self.batch_size - 1) // self.batch_size
 
     def set_epoch(self, epoch: int):
-        """Set the epoch for deterministic shuffling (called by Lightning)."""
+        """Set the epoch for deterministic shuffling (called by Lightning each epoch)."""
         self.epoch = epoch
+        self._epoch_set_externally = True
+
+    def _advance_epoch(self):
+        """Fallback: auto-advance the epoch only when set_epoch was not called since
+        the previous iteration, so external drivers can never double-advance."""
+        if self._iterated and not self._epoch_set_externally:
+            self.epoch += 1
+        self._iterated = True
+        self._epoch_set_externally = False
 
 
 class PrecomputedTextMelDataset(Dataset):
@@ -179,8 +223,8 @@ class PrecomputedTextMelDataset(Dataset):
             if entry.name.endswith(".pt") and entry.is_file()
         )
 
-        random.seed(seed)
-        random.shuffle(self.pt_paths)
+        # Local RNG: never reseed the global random module (process-wide side effect)
+        random.Random(seed).shuffle(self.pt_paths)
 
         self._cache: dict[int, dict] = {}
         if preload_to_memory:
@@ -234,7 +278,9 @@ class PrecomputedTextMelDataset(Dataset):
 
     def __getitem__(self, index):
         if index in self._cache:
-            return self._cache[index]
+            # Shallow copy: downstream mutation of the returned dict must not
+            # corrupt the cache across epochs.
+            return dict(self._cache[index])
         return self._load_from_disk(index)
 
 
@@ -260,6 +306,11 @@ class PrecomputedTextMelDataModule(LightningDataModule):
         self.save_hyperparameters(logger=False)
 
     def setup(self, stage: str | None = None):  # pylint: disable=unused-argument
+        # Lightning calls setup() once per stage (fit/validate/test); the datasets are
+        # stage-independent, so skip the rebuild (and a costly preload_to_memory reload).
+        if getattr(self, "trainset", None) is not None and getattr(self, "validset", None) is not None:
+            return
+
         self.trainset = PrecomputedTextMelDataset(  # pylint: disable=attribute-defined-outside-init
             self.hparams.train_pt_dir,
             self.hparams.n_spks,

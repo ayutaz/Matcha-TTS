@@ -332,7 +332,7 @@ def main():
         type=str,
         nargs="+",
         required=True,
-        help="One or more filelist paths (format: wav_path|speaker_id|text)",
+        help="Filelist paths: train [val] (format: wav_path|speaker_id|text). At most 2.",
     )
     parser.add_argument(
         "--output-dir", type=str, default="data/julius_work", help="Working directory for Julius intermediate files"
@@ -409,6 +409,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # The .pt embed step maps filelist[0] -> train/ and filelist[1] -> val/;
+    # extra filelists would be silently ignored there, so reject them up front.
+    if len(args.filelist) > 2:
+        parser.error(f"--filelist accepts at most 2 filelists (train [val]), got {len(args.filelist)}")
 
     # Resolve precompute mode: --legacy-precompute overrides --unified-precompute
     use_unified = not args.legacy_precompute

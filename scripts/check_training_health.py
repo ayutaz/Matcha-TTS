@@ -39,14 +39,14 @@ def check_health(log_dir: Path) -> dict:
         results["issues"].append("No checkpoints directory found")
 
     # Check TensorBoard events -- look in tensorboard/ subdir first,
-    # then fall back to searching the whole log dir
+    # then fall back to searching the whole log dir if none were found there
     tb_dir = log_dir / "tensorboard"
+    events = []
     if tb_dir.exists():
         events = list(tb_dir.rglob("events.out.tfevents.*"))
-        results["tensorboard_events"] = len(events)
-    else:
+    if not events:
         events = list(log_dir.rglob("events.out.tfevents.*"))
-        results["tensorboard_events"] = len(events)
+    results["tensorboard_events"] = len(events)
 
     if results["tensorboard_events"] == 0:
         results["issues"].append("No TensorBoard event files found")

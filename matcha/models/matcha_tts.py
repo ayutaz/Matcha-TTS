@@ -95,8 +95,12 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 shape: (batch_size,)
             length_scale (float, optional): controls speech pace.
                 Increase value to slow down generated speech and vice versa.
-            clamp_boundary_blanks (bool, optional): if True, clamp first/last blank
-                durations to max 3.0 frames. Defaults to True.
+            clamp_boundary_blanks (bool, optional): if True, clamp the durations of the
+                first and last valid tokens to max 3.0 frames. Assumes `x` is a
+                blank-interspersed sequence (as produced by intersperse() in
+                process_text), where those positions are boundary blanks. On
+                non-interspersed input this clamps the first/last real phonemes
+                instead — pass False in that case. Defaults to True.
 
         Returns:
             dict: {
@@ -192,8 +196,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 shape: (batch_size, 1, max_text_length) or (batch_size, max_text_length)
         """
         if self.n_spks > 1:
-            # Get speaker embedding
-            spks = self.spk_emb(spks)
+            # Get speaker embedding (cast like synthesise() so float/int ids work in both paths)
+            spks = self.spk_emb(spks.long())
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(x, x_lengths, spks)
@@ -250,7 +254,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 cut_lower, cut_upper = out_offset_, out_offset_ + y_cut_length
                 y_cut[i, :, :y_cut_length] = y_[:, cut_lower:cut_upper]
                 attn_cut[i, :, :y_cut_length] = attn[i, :, cut_lower:cut_upper]
-            y_cut_mask = sequence_mask(y_cut_lengths).unsqueeze(1).to(y_mask)
+            # Mask length must match the allocated out_size time dim: with an all-short
+            # batch max(y_cut_lengths) < out_size and the default length would mismatch
+            y_cut_mask = sequence_mask(y_cut_lengths, out_size).unsqueeze(1).to(y_mask)
 
             attn = attn_cut
             y = y_cut

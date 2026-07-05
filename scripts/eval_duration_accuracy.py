@@ -3,8 +3,12 @@
 Usage:
     uv run python scripts/eval_duration_accuracy.py \
         --pred-dir eval/samples/julius_model \
-        --gt-dir /dev/shm/jvs_precomputed_aligned/val \
+        --gt-dir eval/reference_durations \
         --output eval/report/duration_accuracy.json
+
+Both --pred-dir and --gt-dir must contain *_dur.json files (as written by
+scripts/generate_eval_samples.py); predictions and references are paired by
+their path relative to each root directory.
 """
 
 import argparse
@@ -20,7 +24,7 @@ def load_predicted_durations(pred_dir):
     """Load predicted durations from _dur.json files."""
     results = []
     for json_path in sorted(Path(pred_dir).rglob("*_dur.json")):
-        data = json.loads(json_path.read_text())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
         if "predicted_durations" in data:
             results.append(
                 {
@@ -64,6 +68,18 @@ def compute_accuracy(pred_durations, gt_durations):
     return {"mae": mae, "rmse": rmse, "pearson_r": corr, "relative_error": rel_err}
 
 
+def load_reference_durations(gt_dir):
+    """Load ground-truth durations from _dur.json files, keyed by path relative to gt_dir."""
+    gt_dir = Path(gt_dir)
+    references = {}
+    for json_path in sorted(gt_dir.rglob("*_dur.json")):
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        durations = data.get("durations", data.get("predicted_durations"))
+        if durations is not None:
+            references[str(json_path.relative_to(gt_dir))] = durations
+    return references
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Evaluate Duration Predictor accuracy")
     parser.add_argument("--pred-dir", type=str, required=True)
@@ -79,10 +95,45 @@ def main(argv=None):
     predictions = load_predicted_durations(pred_dir)
     print(f"Loaded {len(predictions)} predicted duration files")
 
+    if args.gt_dir is None:
+        print("No --gt-dir given; cannot compute duration accuracy", file=sys.stderr)
+        return 1
+    gt_dir = Path(args.gt_dir)
+    if not gt_dir.exists():
+        print(f"Ground-truth directory not found: {gt_dir}", file=sys.stderr)
+        return 1
+
+    # Pair predictions with references by path relative to their root dirs
+    references = load_reference_durations(gt_dir)
+    per_file = []
+    for pred in predictions:
+        rel = str(Path(pred["path"]).relative_to(pred_dir))
+        gt = references.get(rel)
+        if gt is None:
+            continue
+        metrics = compute_accuracy(pred["durations"], gt)
+        if metrics is not None:
+            per_file.append({"file": rel, **metrics})
+
+    if not per_file:
+        print("No prediction/ground-truth pairs found", file=sys.stderr)
+        return 1
+
+    report = {
+        "n_predictions": len(predictions),
+        "n_pairs": len(per_file),
+        "mae_mean": float(np.mean([m["mae"] for m in per_file])),
+        "rmse_mean": float(np.mean([m["rmse"] for m in per_file])),
+        "pearson_r_mean": float(np.nanmean([m["pearson_r"] for m in per_file])),
+        "relative_error_mean": float(np.nanmean([m["relative_error"] for m in per_file])),
+        "per_file": per_file,
+        "status": "complete",
+    }
+    print(f"MAE: {report['mae_mean']:.2f} frames, RMSE: {report['rmse_mean']:.2f} over {len(per_file)} pairs")
+
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        report = {"n_predictions": len(predictions), "status": "predictions_loaded"}
-        Path(args.output).write_text(json.dumps(report, indent=2))
+        Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return 0
 

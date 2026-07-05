@@ -400,6 +400,34 @@ class TestDualResample:
             # Original duration ~4s, trimmed should be shorter
             assert info_22k.frames < int(4 * 22050)
 
+    def test_stereo_input_downmixed_to_mono(self):
+        """Stereo source is downmixed to mono before trim/write (JVS is mono; fail-safe)."""
+        from prepare_jvs import resample_audio
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "stereo.wav"
+            t = np.arange(24000, dtype=np.float32) / 24000
+            left = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+            sf.write(str(input_path), np.stack([left, 0.5 * left], axis=1), 24000)
+
+            output_22k = Path(tmpdir) / "output_22k.wav"
+            output_16k = Path(tmpdir) / "output_16k.wav"
+
+            resample_audio(
+                str(input_path),
+                str(output_22k),
+                orig_sr=24000,
+                target_sr=22050,
+                do_trim=True,
+                julius_output_path=str(output_16k),
+            )
+
+            info_22k = sf.info(str(output_22k))
+            info_16k = sf.info(str(output_16k))
+            assert info_22k.channels == 1, f"Expected mono 22kHz output, got {info_22k.channels} channels"
+            assert info_16k.channels == 1, f"Expected mono 16kHz output, got {info_16k.channels} channels"
+            assert info_22k.frames > 0
+
     def test_resample_worker_dual_output(self):
         """_resample_worker handles 6-tuple for dual output."""
         from prepare_jvs import _resample_worker
@@ -744,12 +772,13 @@ class TestPrepareJvsBackwardCompat:
 FRAME_SEC = HOP_LENGTH / SAMPLE_RATE
 
 # pyopenjtalk tokens with no Julius segment (prosody-only, duration=0)
-_PROSODY_ONLY = {"#", "[", "]", "?"}
+_PROSODY_ONLY = {"#", "[", "]"}
 
 # pyopenjtalk token -> raw Julius phoneme as it appears in a .lab file
 _PYOPENJTALK_TO_JULIUS_RAW = {
     "^": "silB",
     "$": "silE",
+    "?": "silE",  # interrogative-final sil
     "_": "pau",
     "A": "a",
     "I": "i",
@@ -1264,7 +1293,9 @@ class TestRunFastPipeline:
 class TestLegacyFastParity:
     """The fast path claims binary compatibility with the legacy per-sample path."""
 
-    def test_fast_pt_matches_legacy_single_call(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("stereo", [False, True], ids=["mono", "stereo"])
+    def test_fast_pt_matches_legacy_single_call(self, tmp_path, monkeypatch, stereo):
+        """Parity must hold for mono AND stereo input (both paths downmix identically)."""
         from precompute_with_alignment import build_tasks, process_sample_with_alignment, run_fast_pipeline
 
         from matcha.text import text_to_sequence
@@ -1275,7 +1306,7 @@ class TestLegacyFastParity:
         wav_dir = tmp_path / "wavs" / "jvs009"
         wav_dir.mkdir(parents=True)
         wav_path = wav_dir / "PARITY_1.wav"
-        n = _write_sine_wav(wav_path, 0.9, freq=294.0)
+        n = _write_sine_wav(wav_path, 0.9, freq=294.0, stereo=stereo)
 
         lab_dir = tmp_path / "labs"
         lab_dir.mkdir()
@@ -1401,6 +1432,46 @@ class TestRunSegkitBatch:
         }
         for n in names:
             assert (out_dir / f"{n}.lab").read_text(encoding="utf-8").startswith("0.0000000")
+
+    def _run_and_capture_env(self, tmp_path, monkeypatch, which_result):
+        """Run run_segkit_batch with a stubbed subprocess + shutil.which; return PATH entries."""
+        import run_julius_alignment as rja
+
+        names = ["jvs001_U1"]
+        segkit = self._make_segkit(tmp_path)
+        wav_files, txt_files = self._make_inputs(tmp_path, names)
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs["env"]
+            wav_dir = Path(kwargs["cwd"]) / "wav"
+            for n in names:
+                (wav_dir / f"{n}.lab").write_text("0.0000000 0.5000000 silB\n", encoding="utf-8")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(rja.subprocess, "run", fake_run)
+        monkeypatch.setattr(rja.shutil, "which", lambda cmd: which_result)
+        successes, errors = rja.run_segkit_batch(wav_files, txt_files, str(segkit), str(tmp_path / "out"), timeout=5)
+
+        assert errors == []
+        return segkit, captured["env"]["PATH"].split(os.pathsep)
+
+    def test_env_path_omits_unresolvable_julius(self, tmp_path, no_symlink, monkeypatch):
+        """No literal 'None' PATH entry when julius is not resolvable via shutil.which."""
+        segkit, entries = self._run_and_capture_env(tmp_path, monkeypatch, which_result=None)
+
+        assert "None" not in entries
+        assert entries[0] == str(Path(segkit).resolve() / "bin")
+        assert entries[1:] == ["/usr/bin", "/bin", "/usr/local/bin"]
+
+    def test_env_path_prepends_julius_dir_with_pathsep(self, tmp_path, no_symlink, monkeypatch):
+        """When julius resolves, its directory follows segkit bin/, joined by os.pathsep."""
+        fake_julius = str(Path("/opt/julius/bin/julius"))
+        segkit, entries = self._run_and_capture_env(tmp_path, monkeypatch, which_result=fake_julius)
+
+        assert entries[0] == str(Path(segkit).resolve() / "bin")
+        assert entries[1] == str(Path(fake_julius).parent)
+        assert entries[2:] == ["/usr/bin", "/bin", "/usr/local/bin"]
 
     def test_no_lab_produced_reports_stderr_snippet(self, tmp_path, no_symlink, monkeypatch):
         import run_julius_alignment as rja
@@ -1578,3 +1649,124 @@ class TestTrimSilence:
         out = trim_silence(waveform, self.SR)
 
         assert out.shape[-1] >= self.SR - self.FRAME
+
+    def test_stereo_input_trims_all_channels_like_mono(self):
+        """(2, N) input: energy is detected on the channel mean, channels trimmed alike."""
+        from prepare_jvs import trim_silence
+
+        waveform, _ = self._burst_waveform()  # (1, N)
+        stereo = torch.cat([waveform, 0.5 * waveform], dim=0)  # (2, N)
+
+        trimmed_stereo = trim_silence(stereo, self.SR)
+        trimmed_mono = trim_silence(waveform, self.SR)
+
+        assert trimmed_stereo.shape[0] == 2
+        assert trimmed_stereo.shape[-1] == trimmed_mono.shape[-1]
+        assert torch.equal(trimmed_stereo[0], trimmed_mono[0])
+        assert torch.equal(trimmed_stereo[1], 0.5 * trimmed_mono[0])
+
+
+# ===========================================================================
+# prepare_jvs.py main(): filelist entries only for successful resamples
+# ===========================================================================
+
+
+class TestPrepareJvsMainFilelist:
+    """Failed resamples must not leave dangling filelist entries."""
+
+    def test_failed_resample_entries_dropped(self, tmp_path):
+        jvs_dir = tmp_path / "jvs_ver1"
+        wav_src = jvs_dir / "jvs001" / "parallel100" / "wav24kHz16bit"
+        wav_src.mkdir(parents=True)
+        (jvs_dir / "jvs001" / "parallel100" / "transcripts_utf8.txt").write_text(
+            "UTT001:こんにちは\nUTT002:ありがとう\nUTT003:さようなら\n", encoding="utf-8"
+        )
+        t = np.arange(12000, dtype=np.float32) / 24000
+        tone = (0.4 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+        sf.write(str(wav_src / "UTT001.wav"), tone, 24000)
+        (wav_src / "UTT002.wav").write_bytes(b"this is not a wav file")  # resample fails
+        sf.write(str(wav_src / "UTT003.wav"), tone, 24000)
+
+        out_dir = tmp_path / "out"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "prepare_jvs.py"),
+                "--jvs-dir",
+                str(jvs_dir),
+                "--output-dir",
+                str(out_dir),
+                "--num-workers",
+                "1",
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            timeout=300,
+            check=False,
+            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        entries = []
+        for split in ["train.txt", "val.txt"]:
+            with open(out_dir / split, encoding="utf-8") as f:
+                entries += [line.strip() for line in f if line.strip()]
+
+        assert len(entries) == 2, f"Expected 2 valid entries, got: {entries}"
+        assert all("UTT002" not in e for e in entries), f"Dangling entry for failed resample: {entries}"
+        for e in entries:
+            wav_path = Path(e.split("|", 1)[0])
+            assert wav_path.exists(), f"filelist references missing wav: {wav_path}"
+
+
+# ===========================================================================
+# Pipeline scripts: --filelist accepts at most 2 filelists (train [val])
+# ===========================================================================
+
+
+class TestPipelineFilelistLimit:
+    """The .pt embed step only consumes train/val; a third filelist is rejected loudly."""
+
+    def _make_filelists(self, tmp_path, n):
+        paths = []
+        for i in range(n):
+            p = tmp_path / f"fl{i}.txt"
+            p.write_text("", encoding="utf-8")
+            paths.append(str(p))
+        return paths
+
+    @pytest.mark.parametrize("module_name", ["run_optimized_pipeline", "run_full_alignment_pipeline"])
+    def test_three_filelists_rejected(self, tmp_path, monkeypatch, module_name):
+        mod = __import__(module_name)
+        argv = [
+            f"{module_name}.py",
+            "--filelist",
+            *self._make_filelists(tmp_path, 3),
+            "--output-dir",
+            str(tmp_path / "work"),
+            "--pt-output-dir",
+            str(tmp_path / "pt"),
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as excinfo:
+            mod.main()
+        assert excinfo.value.code == 2
+
+    @pytest.mark.parametrize("module_name", ["run_optimized_pipeline", "run_full_alignment_pipeline"])
+    def test_two_filelists_accepted(self, tmp_path, monkeypatch, module_name):
+        mod = __import__(module_name)
+        argv = [
+            f"{module_name}.py",
+            "--filelist",
+            *self._make_filelists(tmp_path, 2),
+            "--output-dir",
+            str(tmp_path / "work"),
+            "--pt-output-dir",
+            str(tmp_path / "pt"),
+            "--skip-prepare",
+            "--skip-julius",
+            "--skip-convert",
+            "--skip-embed",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        assert mod.main() == 0

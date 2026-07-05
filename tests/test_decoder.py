@@ -257,6 +257,11 @@ class TestSinusoidalPosEmb:
         with pytest.raises(AssertionError, match="even"):
             SinusoidalPosEmb(7)
 
+    def test_dim_two_raises_assertion_error(self):
+        """dim=2 (half_dim=1) is rejected with a clear message instead of ZeroDivisionError."""
+        with pytest.raises(AssertionError, match="dim >= 4"):
+            SinusoidalPosEmb(2)
+
     def test_emb_weights_buffer_values(self):
         """The cached buffer holds exp(arange(half_dim) * -log(10000)/(half_dim-1))."""
         dim = 20
@@ -268,33 +273,28 @@ class TestSinusoidalPosEmb:
 
 
 class TestSinusoidalPosEmbCheckpointCompat:
-    """Characterization tests: emb_weights is a *persistent* buffer.
+    """emb_weights is a *non-persistent* buffer (matching the RoPE caches in the
+    text encoder).
 
     Pre-branch/upstream checkpoints were saved before the register_buffer
-    rewrite and therefore lack the ``time_embeddings.emb_weights`` key, so
-    strict loading currently fails. The intended fix is to register the
-    buffer with ``persistent=False`` (matching the RoPE buffers in the text
-    encoder); once fixed, update these tests to assert strict-load success.
+    rewrite and lack the ``time_embeddings.emb_weights`` key; because the
+    buffer is rebuilt at construction and excluded from the state_dict, strict
+    loading of those checkpoints succeeds. Stale keys from checkpoints saved
+    while the buffer was persistent are stripped at the Lightning level by
+    BaseLightningClass.on_load_checkpoint (covered in test_matcha_tts.py).
     """
 
-    def test_emb_weights_present_in_state_dict(self, decoder):
-        """Current behaviour: the buffer is persisted into the state_dict."""
-        keys = [k for k in decoder.state_dict() if "emb_weights" in k]
-        assert keys == ["time_embeddings.emb_weights"]
+    def test_emb_weights_absent_from_state_dict(self, decoder):
+        """The buffer is non-persistent and never enters the state_dict."""
+        assert [k for k in decoder.state_dict() if "emb_weights" in k] == []
 
-    def test_strict_load_without_emb_weights_raises(self, decoder, decoder_config):
-        """A checkpoint lacking emb_weights fails strict loading with a clear error."""
+    def test_strict_load_without_emb_weights_succeeds(self, decoder, decoder_config, sample_inputs):
+        """A pre-branch checkpoint lacking emb_weights loads cleanly with strict=True;
+        the construction-time buffer stays correct."""
         state_dict = {k: v for k, v in decoder.state_dict().items() if "emb_weights" not in k}
         fresh = Decoder(**decoder_config)
-        with pytest.raises(RuntimeError, match="emb_weights"):
-            fresh.load_state_dict(state_dict, strict=True)
-
-    def test_non_strict_load_recovers(self, decoder, decoder_config, sample_inputs):
-        """strict=False loads cleanly; the construction-time buffer stays correct."""
-        state_dict = {k: v for k, v in decoder.state_dict().items() if "emb_weights" not in k}
-        fresh = Decoder(**decoder_config)
-        result = fresh.load_state_dict(state_dict, strict=False)
-        assert result.missing_keys == ["time_embeddings.emb_weights"]
+        result = fresh.load_state_dict(state_dict, strict=True)
+        assert not result.missing_keys
         assert not result.unexpected_keys
 
         # The buffer was initialized at construction, so embeddings are still correct.
@@ -308,3 +308,15 @@ class TestSinusoidalPosEmbCheckpointCompat:
         with torch.no_grad():
             output = fresh(x, mask, mu, t_dec)
         assert output.shape == (2, 80, 20)
+
+    def test_stale_persistent_key_requires_hook_strip(self, decoder, decoder_config):
+        """A checkpoint saved while the buffer was persistent carries a stale key:
+        plain nn.Module strict loading rejects it, which is why the Lightning
+        on_load_checkpoint hook strips it before loading."""
+        state_dict = dict(decoder.state_dict())
+        state_dict["time_embeddings.emb_weights"] = decoder.time_embeddings.emb_weights.clone()
+        fresh = Decoder(**decoder_config)
+        with pytest.raises(RuntimeError, match="emb_weights"):
+            fresh.load_state_dict(state_dict, strict=True)
+        result = fresh.load_state_dict(state_dict, strict=False)
+        assert result.unexpected_keys == ["time_embeddings.emb_weights"]

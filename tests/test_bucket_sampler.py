@@ -146,6 +146,103 @@ class TestBucketBatchSampler:
 
 
 # ---------------------------------------------------------------------------
+# Epoch semantics (set_epoch external drive + auto-advance fallback)
+# ---------------------------------------------------------------------------
+
+
+def _make_bucket_sampler(seed=123):
+    return BucketBatchSampler(_make_file_sizes(), batch_size=BATCH_SIZE, num_buckets=4, drop_last=False, seed=seed)
+
+
+def _make_distributed_sampler(rank, num_replicas=2, seed=0):
+    return DistributedBucketBatchSampler(
+        _make_file_sizes(),
+        batch_size=BATCH_SIZE,
+        num_replicas=num_replicas,
+        rank=rank,
+        num_buckets=4,
+        drop_last=False,
+        seed=seed,
+    )
+
+
+class TestEpochSemantics:
+    """Unified epoch semantics for both samplers: an external set_epoch always wins,
+    the internal auto-advance is only a fallback for un-driven iteration, and
+    Lightning's _set_sampler_epoch can reach the samplers via the `.sampler` attribute."""
+
+    def test_bucket_sampler_set_epoch_is_deterministic(self):
+        """Two fresh samplers driven to the same epoch yield identical batches;
+        a different epoch yields a different order."""
+        sampler_a = _make_bucket_sampler()
+        sampler_a.set_epoch(5)
+        batches_a = [tuple(b) for b in sampler_a]
+
+        sampler_b = _make_bucket_sampler()
+        sampler_b.set_epoch(5)
+        assert [tuple(b) for b in sampler_b] == batches_a
+
+        sampler_c = _make_bucket_sampler()
+        sampler_c.set_epoch(6)
+        assert [tuple(b) for b in sampler_c] != batches_a
+
+    @pytest.mark.parametrize("make_sampler", [_make_bucket_sampler, lambda: _make_distributed_sampler(rank=0)])
+    def test_set_epoch_resumes_auto_advance_schedule(self, make_sampler):
+        """Driving a fresh sampler with set_epoch(n) reproduces the n-th epoch of an
+        un-driven sampler — checkpoint resume no longer restarts the shuffle at epoch 0."""
+        undriven = make_sampler()
+        schedule = [[tuple(b) for b in undriven] for _ in range(3)]
+
+        for n in range(3):
+            resumed = make_sampler()
+            resumed.set_epoch(n)
+            assert [tuple(b) for b in resumed] == schedule[n], f"epoch {n} not reproduced"
+
+    @pytest.mark.parametrize("make_sampler", [_make_bucket_sampler, lambda: _make_distributed_sampler(rank=0)])
+    def test_external_set_epoch_prevents_auto_advance(self, make_sampler):
+        """When set_epoch is driven externally, the fallback cannot double-advance:
+        re-requesting the same epoch replays exactly the same batches."""
+        sampler = make_sampler()
+        sampler.set_epoch(2)
+        first = [tuple(b) for b in sampler]
+        sampler.set_epoch(2)
+        assert [tuple(b) for b in sampler] == first
+        assert sampler.epoch == 2
+
+    @pytest.mark.parametrize("make_sampler", [_make_bucket_sampler, lambda: _make_distributed_sampler(rank=0)])
+    def test_lightning_set_sampler_epoch_reaches_sampler(self, make_sampler):
+        """Lightning's _set_sampler_epoch only inspects dataloader.sampler and
+        dataloader.batch_sampler.sampler; the exposed `.sampler` attribute must make
+        it reach our batch samplers."""
+        from lightning.fabric.utilities.data import _set_sampler_epoch
+        from torch.utils.data import DataLoader
+
+        sampler = make_sampler()
+        assert sampler.sampler is sampler
+        loader = DataLoader(dataset=list(range(NUM_SAMPLES)), batch_sampler=sampler)
+        _set_sampler_epoch(loader, 7)
+        assert sampler.epoch == 7
+
+    def test_stray_iteration_resynced_by_set_epoch(self):
+        """An extra un-driven iteration on one rank must not desynchronize the global
+        permutation once set_epoch is driven again: rank partitions stay disjoint."""
+        num_replicas = 2
+        sampler_0 = _make_distributed_sampler(rank=0, num_replicas=num_replicas)
+        sampler_1 = _make_distributed_sampler(rank=1, num_replicas=num_replicas)
+
+        list(sampler_0)  # stray extra iteration on rank 0 only
+
+        sampler_0.set_epoch(3)
+        sampler_1.set_epoch(3)
+        indices_0 = set(_collect_all_indices(sampler_0))
+        indices_1 = set(_collect_all_indices(sampler_1))
+
+        # NUM_SAMPLES divides evenly by 2 replicas: partition must be exact
+        assert not (indices_0 & indices_1), "Ranks overlap after resync"
+        assert indices_0 | indices_1 == set(range(NUM_SAMPLES)), "Samples missing after resync"
+
+
+# ---------------------------------------------------------------------------
 # DistributedBucketBatchSampler tests
 # ---------------------------------------------------------------------------
 

@@ -170,6 +170,79 @@ class TestBaseAlignerOutput:
         expected_total_frames = round(10.0 * 22050 / 256)
         assert sum(durations) == expected_total_frames
 
+    def test_to_durations_length_mismatch_raises(self, tmp_path):
+        """target_phonemesの長さがセグメント数と一致しない場合ValueError"""
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = self._make_lab_file(tmp_path)
+        output = JuliusOutput.from_lab_file(lab_path)
+
+        # blank intersperse済みのような長さ違いの列は黙って処理しない
+        with pytest.raises(ValueError, match="1:1 correspondence"):
+            output.to_durations(["sil", "k"])
+
+    def test_to_durations_phoneme_mismatch_raises(self, tmp_path):
+        """target_phonemesの音素がセグメントと対応しない場合ValueError"""
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = self._make_lab_file(tmp_path)
+        output = JuliusOutput.from_lab_file(lab_path)
+
+        with pytest.raises(ValueError, match=r"target_phonemes\[1\]='t'"):
+            output.to_durations(["sil", "t", "a", "sil"])
+
+    def test_to_durations_accepts_pyopenjtalk_equivalents(self, tmp_path):
+        """^/$ ↔ sil、無声化母音 ↔ 小文字母音の対応を受け入れること"""
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = self._make_lab_file(tmp_path)
+        output = JuliusOutput.from_lab_file(lab_path)
+
+        durations = output.to_durations(["^", "k", "a", "$"])
+        assert len(durations) == 4
+        assert sum(durations) == round(10.0 * 22050 / 256)
+
+        # 無声化母音: pyopenjtalk "U" ↔ Julius "u"
+        devoiced = JuliusOutput([(0.0, 1.0, "silB"), (1.0, 2.0, "u"), (2.0, 3.0, "silE")])
+        durations = devoiced.to_durations(["^", "U", "$"])
+        assert len(durations) == 3
+
+    def test_to_durations_total_mel_frames_repair(self):
+        """total_mel_frames指定時に合計がその値に調整されること"""
+        from matcha.alignment.base import JuliusOutput
+
+        # セグメント間に1秒のギャップ（86フレーム欠落）
+        output = JuliusOutput([(0.0, 1.0, "a"), (2.0, 3.0, "i")])
+        total_mel_frames = round(3.0 * 22050 / 256)
+
+        durations = output.to_durations(["a", "i"], total_mel_frames=total_mel_frames)
+        assert durations.sum() == total_mel_frames
+        # 最後の非ゼロdurationが調整される（scriptと同じ規約）
+        assert durations[0] == round(1.0 * 22050 / 256)
+
+    def test_to_durations_gap_warning(self, caplog):
+        """セグメント間のギャップは警告を出すこと"""
+        import logging
+
+        from matcha.alignment.base import JuliusOutput
+
+        output = JuliusOutput([(0.0, 1.0, "a"), (2.0, 3.0, "i")])
+        with caplog.at_level(logging.WARNING):
+            output.to_durations(["a", "i"])
+        assert any("gaps/overlaps" in rec.message for rec in caplog.records)
+
+    def test_to_durations_contiguous_no_warning(self, tmp_path, caplog):
+        """ギャップの無い連続セグメントでは警告を出さないこと"""
+        import logging
+
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = self._make_lab_file(tmp_path)
+        output = JuliusOutput.from_lab_file(lab_path)
+        with caplog.at_level(logging.WARNING):
+            output.to_durations(["sil", "k", "a", "sil"])
+        assert not any("gaps/overlaps" in rec.message for rec in caplog.records)
+
     def test_julius_output_empty_lab(self, tmp_path):
         """空の.labファイルを処理できること"""
         from matcha.alignment.base import JuliusOutput
@@ -195,6 +268,39 @@ class TestBaseAlignerOutput:
         output = JuliusOutput.from_lab_file(lab_path)
 
         assert output.get_phonemes() == ["silB", "k"]
+
+    def test_julius_output_invalid_timestamp_warns(self, tmp_path, caplog):
+        """数値でないタイムスタンプの行は警告を出してスキップすること"""
+        import logging
+
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = tmp_path / "invalid.lab"
+        lab_path.write_text(
+            "0 30000000 silB\nabc def k\n30000000 50000000 k\n",
+            encoding="utf-8",
+        )
+        with caplog.at_level(logging.WARNING):
+            output = JuliusOutput.from_lab_file(lab_path)
+
+        assert output.get_phonemes() == ["silB", "k"]
+        assert any("Skipping invalid line" in rec.message for rec in caplog.records)
+
+    def test_julius_output_float_seconds_format(self, tmp_path):
+        """Julius segmentation-kitのfloat秒形式.labをパースできること"""
+        from matcha.alignment.base import JuliusOutput
+
+        lab_path = tmp_path / "float.lab"
+        lab_path.write_text(
+            "0.0000000 0.0425000 silB\n0.0425000 0.1000000 k\n0.1000000 0.2000000 silE\n",
+            encoding="utf-8",
+        )
+        output = JuliusOutput.from_lab_file(lab_path)
+
+        assert output.get_phonemes() == ["silB", "k", "silE"]
+        timings = output.get_timings()
+        assert timings[0] == pytest.approx((0.0, 0.0425))
+        assert timings[1] == pytest.approx((0.0425, 0.1))
 
     def test_mfa_output_not_implemented(self):
         """MFAOutputがNotImplementedErrorを出すこと"""

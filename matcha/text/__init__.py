@@ -46,16 +46,16 @@ def text_to_sequence(text, cleaner_names, *, language="en"):
     Returns:
       List of integers corresponding to the symbols in the text
     """
+    sym2id, _ = _get_symbol_map(language)
     sequence = []
     clean_text = _cached_clean_text(text, tuple(cleaner_names), language)
 
     if language == "ja":
-        sym2id, _ = _get_symbol_map("ja")
         for symbol in clean_text.split():
             sequence.append(sym2id[symbol])
     else:
         for symbol in clean_text:
-            symbol_id = _symbol_to_id[symbol]
+            symbol_id = sym2id[symbol]
             sequence.append(symbol_id)
 
     return sequence, clean_text
@@ -69,28 +69,28 @@ def cleaned_text_to_sequence(cleaned_text, *, language="en"):
     Returns:
       List of integers corresponding to the symbols in the text
     """
+    sym2id, _ = _get_symbol_map(language)
     if language == "ja":
-        sym2id, _ = _get_symbol_map("ja")
         return [sym2id[symbol] for symbol in cleaned_text.split()]
-    return [_symbol_to_id[symbol] for symbol in cleaned_text]
+    return [sym2id[symbol] for symbol in cleaned_text]
 
 
 def sequence_to_text(sequence, *, language="en"):
     """Converts a sequence of IDs back to a string"""
+    _, id2sym = _get_symbol_map(language)
     if language == "ja":
-        _, id2sym = _get_symbol_map("ja")
         return " ".join(id2sym[symbol_id] for symbol_id in sequence)
     result = ""
     for symbol_id in sequence:
-        s = _id_to_symbol[symbol_id]
+        s = id2sym[symbol_id]
         result += s
     return result
 
 
 def _clean_text(text, cleaner_names):
     for name in cleaner_names:
-        cleaner = getattr(cleaners, name)
-        if not cleaner:
+        cleaner = getattr(cleaners, name, None)
+        if cleaner is None:
             raise UnknownCleanerException(f"Unknown cleaner: {name}")
         text = cleaner(text)
     return text

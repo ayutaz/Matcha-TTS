@@ -223,28 +223,44 @@ class TestEnglishBackwardCompatibility:
 # ---------------------------------------------------------------------------
 
 
-def _make_label(ph, a1="xx", a2="xx", f1="xx"):
+def _make_label(ph, a1="xx", a2="xx", a3="xx", f1="xx", e3="xx"):
     """Build a minimal synthetic HTS full-context label.
 
     Only the fields that ``_fullcontext_to_prosody`` actually parses are
-    populated: the ``-p3+`` phoneme slot, ``/A:a1+a2+…`` and ``/F:f1_…``.
-    Passing the default ``"xx"`` makes the corresponding regex fail to match,
-    exactly as in real pyopenjtalk labels for silence segments.
+    populated: the ``-p3+`` phoneme slot, ``/A:a1+a2+a3``, the ``!e3_`` slot
+    of the /E: block and ``/F:f1_…``.  Passing the default ``"xx"`` makes the
+    corresponding regex fail to match, exactly as in real pyopenjtalk labels
+    for silence segments.
     """
-    return f"xx^xx-{ph}+xx=xx/A:{a1}+{a2}+xx/F:{f1}_xx"
+    return f"xx^xx-{ph}+xx=xx/A:{a1}+{a2}+{a3}/E:xx_xx!{e3}_xx-xx/F:{f1}_xx"
 
 
 class TestFullcontextToProsody:
-    """Characterization tests for _fullcontext_to_prosody on synthetic labels.
+    """Tests for _fullcontext_to_prosody (ttslearn ``pp_symbols`` semantics).
 
-    These pin the CURRENT behaviour of the branch (including known quirks)
-    so that any refactor of the label-parsing regexes is caught.
+    Feature semantics (verified against real pyopenjtalk labels):
+    a1 = mora position relative to the accent nucleus (0 at the nucleus),
+    a2 = forward mora position, a3 = backward mora position, f1 = mora count,
+    e3 = interrogative flag of the utterance-final silence.
     """
 
     def test_sil_positions(self):
-        """First sil -> '^', last sil -> '$', middle sil -> '?'."""
-        labels = [_make_label("sil"), _make_label("sil"), _make_label("sil")]
-        assert _fullcontext_to_prosody(labels) == ["^", "?", "$"]
+        """First sil -> '^'; a later sil with e3 == 0 -> '$' (declarative end)."""
+        labels = [_make_label("sil"), _make_label("sil", e3=0)]
+        assert _fullcontext_to_prosody(labels) == ["^", "$"]
+
+    def test_final_sil_question(self):
+        """A final sil with e3 == 1 marks an interrogative utterance -> '?'."""
+        labels = [
+            _make_label("sil"),
+            _make_label("a", a1=0, a2=1, a3=1, f1=1),
+            _make_label("sil", e3=1),
+        ]
+        assert _fullcontext_to_prosody(labels) == ["^", "a", "?"]
+
+    def test_final_sil_without_e_field_defaults_to_end(self):
+        """A final sil whose /E: block is all 'xx' falls back to '$'."""
+        assert _fullcontext_to_prosody([_make_label("sil"), _make_label("sil")]) == ["^", "$"]
 
     def test_single_sil_label_treated_as_start(self):
         """A lone sil label is both first and last; the i == 0 branch wins."""
@@ -254,28 +270,47 @@ class TestFullcontextToProsody:
         assert _fullcontext_to_prosody([_make_label("pau")]) == ["_"]
 
     def test_accent_phrase_boundary(self):
-        """'#' is emitted when a1 == 1 and the NEXT label has a2 == 1."""
+        """'#' follows the phrase-final vowel when a3 == 1 and the next a2 == 1."""
         labels = [
-            _make_label("k", a1=1, a2=3, f1=5),  # a1==1, next a2==1 -> '#'
-            _make_label("a", a1=1, a2=1, f1=5),  # last label: rise marker only
+            _make_label("o", a1=0, a2=3, a3=1, f1=3),  # last mora of phrase
+            _make_label("m", a1=-1, a2=1, a3=7, f1=7),  # first mora of next phrase
         ]
-        assert _fullcontext_to_prosody(labels) == ["#", "k", "[", "a"]
+        assert _fullcontext_to_prosody(labels) == ["o", "#", "m"]
 
-    def test_pitch_rise(self):
-        """'[' is emitted when a2 == 1 and a1 == 1 (next a2 != 1 avoids '#')."""
+    def test_boundary_not_emitted_after_consonant(self):
+        """'#' is restricted to vowel-like phonemes (aeiouAEIOU, N, cl)."""
         labels = [
-            _make_label("k", a1=1, a2=1, f1=5),
-            _make_label("a", a1=2, a2=2, f1=5),
+            _make_label("k", a1=1, a2=3, a3=1, f1=3),
+            _make_label("m", a1=-1, a2=1, a3=7, f1=7),
         ]
-        assert _fullcontext_to_prosody(labels) == ["[", "k", "a"]
+        assert _fullcontext_to_prosody(labels) == ["k", "m"]
 
-    def test_pitch_fall(self):
-        """']' is emitted when a1 == a2 + 1 and a2 != f1."""
-        assert _fullcontext_to_prosody([_make_label("o", a1=2, a2=1, f1=3)]) == ["]", "o"]
+    def test_pitch_rise_once_per_mora_transition(self):
+        """'[' follows the vowel of mora 1 only; the consonant of the same mora
+        (identical A-features) must NOT receive a duplicate marker."""
+        labels = [
+            _make_label("k", a1=-4, a2=1, a3=5, f1=5),
+            _make_label("o", a1=-4, a2=1, a3=5, f1=5),
+            _make_label("N", a1=-3, a2=2, a3=4, f1=5),
+        ]
+        assert _fullcontext_to_prosody(labels) == ["k", "o", "[", "N"]
+
+    def test_pitch_fall_at_accent_nucleus(self):
+        """']' follows the nucleus vowel (a1 == 0) at the next mora transition."""
+        labels = [
+            _make_label("r", a1=0, a2=2, a3=6, f1=7),
+            _make_label("e", a1=0, a2=2, a3=6, f1=7),
+            _make_label("e", a1=1, a2=3, a3=5, f1=7),
+        ]
+        assert _fullcontext_to_prosody(labels) == ["r", "e", "]", "e"]
 
     def test_no_fall_when_accent_on_last_mora(self):
-        """No ']' when a2 == f1 even though a1 == a2 + 1."""
-        assert _fullcontext_to_prosody([_make_label("o", a1=2, a2=1, f1=1)]) == ["o"]
+        """No ']' when the nucleus sits on the phrase-final mora (a2 == f1)."""
+        labels = [
+            _make_label("a", a1=0, a2=3, a3=1, f1=3),
+            _make_label("k", a1=-1, a2=4, a3=7, f1=7),  # synthetic a2_next == a2 + 1
+        ]
+        assert _fullcontext_to_prosody(labels) == ["a", "k"]
 
     def test_missing_accent_fields_yield_plain_phoneme(self):
         """'xx' in the /A: and /F: fields -> plain phoneme, no prosody markers."""
@@ -291,31 +326,85 @@ class TestFullcontextToProsody:
         assert _fullcontext_to_prosody(labels) == ["a"]
 
     def test_last_label_a2_next_defaults_to_minus_one(self):
-        """For the final label a2_next defaults to -1, so a1 == 1 emits no '#'."""
-        assert _fullcontext_to_prosody([_make_label("a", a1=1, a2=2, f1=5)]) == ["a"]
+        """For the final label a2_next defaults to -1, so no marker is emitted."""
+        assert _fullcontext_to_prosody([_make_label("a", a1=0, a2=1, a3=2, f1=2)]) == ["a"]
 
     def test_negative_a1_emits_no_markers(self):
         """Negative a1 (mora before the accent nucleus) parses and emits no marker."""
-        assert _fullcontext_to_prosody([_make_label("k", a1=-4, a2=1, f1=5)]) == ["k"]
+        assert _fullcontext_to_prosody([_make_label("k", a1=-4, a2=1, a3=5, f1=5)]) == ["k"]
 
     def test_empty_label_list(self):
         assert _fullcontext_to_prosody([]) == []
 
-    def test_probe_characterization_full_utterance(self):
-        """Characterization: pin the full output for a synthetic utterance.
 
-        NOTE: this pins current-branch behaviour, including the quirk that
-        every phoneme whose mora satisfies a1 == 1 and a2 == 1 receives its
-        own '[' marker (duplicate '['-per-mora), rather than one '[' per
-        accent phrase as in ttslearn's pp_symbols.
-        """
+class TestFullcontextToProsodyRealLabels:
+    """End-to-end checks on verbatim pyopenjtalk-plus labels (no pyopenjtalk needed).
+
+    Labels were dumped with ``pyopenjtalk.extract_fullcontext`` and the expected
+    outputs follow ttslearn's ``pp_symbols`` (except devoiced vowels stay
+    uppercase, e.g. U, because symbols_ja has dedicated entries for them).
+    """
+
+    def test_konnichiwa(self):
+        """こんにちは (accent type 5, 5 moras): rise after mora 1, no fall."""
         labels = [
-            "xx^xx-sil+k=o/A:xx+xx+xx/F:xx_xx",
-            "xx^sil-k+a=a/A:1+1+5/F:5_1",
-            "sil^k-a+sil=xx/A:1+1+5/F:5_1",
-            "k^a-sil+xx=xx/A:xx+xx+xx/F:xx_xx",
+            "xx^xx-sil+k=o/A:xx+xx+xx/B:xx-xx_xx/C:xx_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:xx_xx#xx_xx@xx_xx|xx_xx/G:5_5%0_0_xx/H:xx_xx/I:xx-xx@xx+xx&xx-xx|xx+xx/J:1_5/K:1+1-5",
+            "xx^sil-k+o=N/A:-4+1+5/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "sil^k-o+N=n/A:-4+1+5/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "k^o-N+n=i/A:-3+2+4/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "o^N-n+i=ch/A:-2+3+3/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "N^n-i+ch=i/A:-2+3+3/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "n^i-ch+i=w/A:-1+4+2/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "i^ch-i+w=a/A:-1+4+2/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "ch^i-w+a=sil/A:0+5+1/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "i^w-a+sil=xx/A:0+5+1/B:xx-xx_xx/C:09_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:5_5#0_0@1_1|1_5/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-5@1+1&1-1|1+5/J:xx_xx/K:1+1-5",
+            "w^a-sil+xx=xx/A:xx+xx+xx/B:xx-xx_xx/C:xx_xx+xx/D:xx+xx_xx/E:5_5!0_0-xx/F:xx_xx#xx_xx@xx_xx|xx_xx/G:xx_xx%xx_xx_xx/H:1_5/I:xx-xx@xx+xx&xx-xx|xx+xx/J:xx_xx/K:1+1-5",
         ]
-        assert _fullcontext_to_prosody(labels) == ["^", "#", "[", "k", "[", "a", "$"]
+        expected = ["^", "k", "o", "[", "N", "n", "i", "ch", "i", "w", "a", "$"]
+        assert _fullcontext_to_prosody(labels) == expected
+
+    def test_question_utterance(self):
+        """元気ですか？ (accent type 1): fall after the nucleus, final '?'."""
+        labels = [
+            "xx^xx-sil+g=e/A:xx+xx+xx/B:xx-xx_xx/C:xx_xx+xx/D:19+xx_xx/E:xx_xx!xx_xx-xx/F:xx_xx#xx_xx@xx_xx|xx_xx/G:6_1%1_0_xx/H:xx_xx/I:xx-xx@xx+xx&xx-xx|xx+xx/J:1_6/K:1+1-6",
+            "xx^sil-g+e=N/A:0+1+6/B:xx-xx_xx/C:19_xx+xx/D:10+7_2/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "sil^g-e+N=k/A:0+1+6/B:xx-xx_xx/C:19_xx+xx/D:10+7_2/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "g^e-N+k=i/A:1+2+5/B:xx-xx_xx/C:19_xx+xx/D:10+7_2/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "e^N-k+i=d/A:2+3+4/B:xx-xx_xx/C:19_xx+xx/D:10+7_2/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "N^k-i+d=e/A:2+3+4/B:xx-xx_xx/C:19_xx+xx/D:10+7_2/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "k^i-d+e=s/A:3+4+3/B:19-xx_xx/C:10_7+2/D:23+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "i^d-e+s=U/A:3+4+3/B:19-xx_xx/C:10_7+2/D:23+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "d^e-s+U=k/A:4+5+2/B:19-xx_xx/C:10_7+2/D:23+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "e^s-U+k=a/A:4+5+2/B:19-xx_xx/C:10_7+2/D:23+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "s^U-k+a=sil/A:5+6+1/B:10-7_2/C:23_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "U^k-a+sil=xx/A:5+6+1/B:10-7_2/C:23_xx+xx/D:xx+xx_xx/E:xx_xx!xx_xx-xx/F:6_1#1_0@1_1|1_6/G:xx_xx%xx_xx_xx/H:xx_xx/I:1-6@1+1&1-1|1+6/J:xx_xx/K:1+1-6",
+            "k^a-sil+xx=xx/A:xx+xx+xx/B:23-xx_xx/C:xx_xx+xx/D:xx+xx_xx/E:6_1!1_0-xx/F:xx_xx#xx_xx@xx_xx|xx_xx/G:xx_xx%xx_xx_xx/H:1_6/I:xx-xx@xx+xx&xx-xx|xx+xx/J:xx_xx/K:1+1-6",
+        ]
+        expected = ["^", "g", "e", "]", "N", "k", "i", "d", "e", "s", "U", "k", "a", "?"]
+        assert _fullcontext_to_prosody(labels) == expected
+
+    def test_ttslearn_reference_prefix(self):
+        """水をマレーシア… must reproduce the pp_symbols docstring example
+        ``^ m i [ z u o # m a [ r e ] e sh i a`` (first 14 labels)."""
+        labels = [
+            "xx^xx-sil+m=i/A:xx+xx+xx/B:xx-xx_xx/C:xx_xx+xx/D:02+xx_xx/E:xx_xx!xx_xx-xx/F:xx_xx#xx_xx@xx_xx|xx_xx/G:3_3%0_0_xx/H:xx_xx/I:xx-xx@xx+xx&xx-xx|xx+xx/J:3_23/K:1+3-23",
+            "xx^sil-m+i=z/A:-2+1+3/B:xx-xx_xx/C:02_xx+xx/D:13+xx_xx/E:xx_xx!xx_xx-xx/F:3_3#0_0@1_3|1_23/G:7_2%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "sil^m-i+z=u/A:-2+1+3/B:xx-xx_xx/C:02_xx+xx/D:13+xx_xx/E:xx_xx!xx_xx-xx/F:3_3#0_0@1_3|1_23/G:7_2%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "m^i-z+u=o/A:-1+2+2/B:xx-xx_xx/C:02_xx+xx/D:13+xx_xx/E:xx_xx!xx_xx-xx/F:3_3#0_0@1_3|1_23/G:7_2%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "i^z-u+o=m/A:-1+2+2/B:xx-xx_xx/C:02_xx+xx/D:13+xx_xx/E:xx_xx!xx_xx-xx/F:3_3#0_0@1_3|1_23/G:7_2%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "z^u-o+m=a/A:0+3+1/B:02-xx_xx/C:13_xx+xx/D:18+xx_xx/E:xx_xx!xx_xx-xx/F:3_3#0_0@1_3|1_23/G:7_2%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "u^o-m+a=r/A:-1+1+7/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "o^m-a+r=e/A:-1+1+7/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "m^a-r+e=e/A:0+2+6/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "a^r-e+e=sh/A:0+2+6/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "r^e-e+sh=i/A:1+3+5/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "e^e-sh+i=a/A:2+4+4/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "e^sh-i+a=k/A:2+4+4/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+            "sh^i-a+k=a/A:3+5+3/B:13-xx_xx/C:18_xx+xx/D:13+xx_xx/E:3_3!0_0-1/F:7_2#0_0@2_2|4_20/G:13_3%0_0_1/H:xx_xx/I:3-23@1+1&1-3|1+23/J:xx_xx/K:1+3-23",
+        ]
+        # "^ m i [ z u o # m a [ r e ] e sh i a" (pp_symbols docstring example)
+        expected = ["^", "m", "i", "[", "z", "u", "o", "#", "m", "a", "[", "r", "e", "]", "e", "sh", "i", "a"]
+        assert _fullcontext_to_prosody(labels) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -463,14 +552,19 @@ class TestErrorPaths:
         with pytest.raises(KeyError, match="999"):
             sequence_to_text([999], language="ja")
 
-    def test_unknown_language_falls_through_to_english(self):
-        """Characterization: text_to_sequence only special-cases 'ja', so any
-        other language string (e.g. 'xx') silently takes the English path
-        today instead of raising. Pinning current behaviour."""
-        seq_xx, clean_xx = text_to_sequence("hello", ["basic_cleaners"], language="xx")
-        seq_en, clean_en = text_to_sequence("hello", ["basic_cleaners"], language="en")
-        assert seq_xx == seq_en
-        assert clean_xx == clean_en
+    def test_unknown_language_raises_in_text_to_sequence(self):
+        """Regression: an unknown language (e.g. 'xx') used to silently take
+        the English path; it must now raise ValueError."""
+        with pytest.raises(ValueError, match="Unsupported language"):
+            text_to_sequence("hello", ["basic_cleaners"], language="xx")
+
+    def test_unknown_language_raises_in_cleaned_text_to_sequence(self):
+        with pytest.raises(ValueError, match="Unsupported language"):
+            cleaned_text_to_sequence("hello", language="fr")
+
+    def test_unknown_language_raises_in_sequence_to_text(self):
+        with pytest.raises(ValueError, match="Unsupported language"):
+            sequence_to_text([1, 2, 3], language="fr")
 
 
 # ---------------------------------------------------------------------------
@@ -509,11 +603,26 @@ class TestJapaneseCleanersExtended:
         assert len(seq) == len(tokens)
 
     def test_accented_text_produces_pitch_rise(self):
-        """A sentence containing a heiban accent phrase (東京) yields '['."""
+        """東京は日本の首都です must contain a pitch rise marker '['."""
         from matcha.text.cleaners import japanese_cleaners
 
         tokens = japanese_cleaners("東京は日本の首都です").split()
         assert "[" in tokens
+
+    def test_ttslearn_reference_sentence(self):
+        """水をマレーシア… must reproduce ttslearn's pp_symbols example prefix."""
+        from matcha.text.cleaners import japanese_cleaners
+
+        result = japanese_cleaners("水をマレーシアから買わなくてはならないのです")
+        assert result.startswith("^ m i [ z u o # m a [ r e ] e sh i a")
+
+    def test_question_ends_with_question_mark(self):
+        """An interrogative utterance must end with '?' (e3 == 1 on final sil)."""
+        from matcha.text.cleaners import japanese_cleaners
+
+        tokens = japanese_cleaners("元気ですか？").split()
+        assert tokens[0] == "^"
+        assert tokens[-1] == "?"
 
     @pytest.mark.parametrize(
         "text",

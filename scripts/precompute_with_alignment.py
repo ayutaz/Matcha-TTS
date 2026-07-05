@@ -190,6 +190,8 @@ def process_sample_with_alignment(
         # 1. Mel spectrogram
         data, sr = sf.read(wav_path, dtype="float32")
         assert sr == SAMPLE_RATE, f"Expected {SAMPLE_RATE} Hz, got {sr}"
+        if data.ndim > 1:
+            data = data.mean(axis=1).astype(np.float32)  # downmix to mono, same as fast-path _load_one
         audio = torch.from_numpy(data).unsqueeze(0)
         mel = mel_spectrogram(
             audio, N_FFT, N_MELS, SAMPLE_RATE, HOP_LENGTH, WIN_LENGTH, F_MIN, F_MAX, center=False

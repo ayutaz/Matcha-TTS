@@ -70,8 +70,8 @@ def parse_lab_file(lab_path: str | Path) -> list[tuple[float, float, str]]:
     100ns integers. The detector checks for a decimal point in either
     timestamp field.
 
-    Lines with non-numeric timestamps or fewer than 3 fields are skipped
-    with a warning rather than raising an exception.
+    Lines with non-numeric timestamps are skipped with a warning; lines with
+    fewer than 3 fields are skipped silently. Neither raises an exception.
 
     Args:
         lab_path: Path to the .lab file.
@@ -143,9 +143,9 @@ def time_to_frames(start_sec: float, end_sec: float) -> int:
 def _pyopenjtalk_to_julius_key(ph: str) -> str | None:
     """Map a pyopenjtalk phoneme to the corresponding Julius lookup key.
 
-    - Prosody symbols with no Julius counterpart (``#``, ``[``, ``]``, ``?``)
+    - Prosody symbols with no Julius counterpart (``#``, ``[``, ``]``)
       return None.
-    - ``^`` and ``$`` are mapped by the caller (first/last sil).
+    - ``^``, ``$`` and ``?`` are mapped by the caller (first/last sil).
     - ``_`` corresponds to ``pau`` in Julius.
     - Devoiced vowels (A,I,U,E,O) map to their lowercase form.
     - All other phonemes are looked up directly in JULIUS_TO_PYOPENJTALK values.
@@ -154,7 +154,7 @@ def _pyopenjtalk_to_julius_key(ph: str) -> str | None:
         The Julius phoneme string to match, or None if this pyopenjtalk symbol
         has no Julius counterpart and should receive duration=0.
     """
-    if ph in {"#", "[", "]", "?"}:
+    if ph in {"#", "[", "]"}:
         return None
     if ph in _DEVOICED_TO_VOICED:
         return _DEVOICED_TO_VOICED[ph]
@@ -172,10 +172,10 @@ def align_julius_with_pyopenjtalk(
     The alignment follows these rules:
       1. ``^`` (sentence start) gets the duration of the first Julius ``sil``
          (silB).
-      2. ``$`` (sentence end) gets the duration of the last Julius ``sil``
-         (silE).
+      2. ``$`` (declarative end) and ``?`` (interrogative end) get the
+         duration of the last Julius ``sil`` (silE).
       3. ``_`` (pause) gets the duration of the next unmatched Julius ``pau``.
-      4. ``#``, ``[``, ``]``, ``?`` get duration=0 (prosody-only markers).
+      4. ``#``, ``[``, ``]`` get duration=0 (prosody-only markers).
       5. Devoiced vowels (A,I,U,E,O) are matched against Julius lowercase
          vowels (a,i,u,e,o). If no matching Julius phoneme remains at the
          current position, duration=0 is assigned.
@@ -217,7 +217,7 @@ def align_julius_with_pyopenjtalk(
 
     # --- Pre-process: separate prosody symbols from real phonemes ---
     # Build indices for prosody-only positions vs real phoneme positions
-    _PROSODY_ONLY = {"#", "[", "]", "?"}
+    _PROSODY_ONLY = {"#", "[", "]"}
 
     n_julius = len(julius_phonemes)
     n_pyopenjtalk = len(pyopenjtalk_phonemes)
@@ -239,8 +239,8 @@ def align_julius_with_pyopenjtalk(
                     break
             continue
 
-        # Rule 2: sentence end
-        if ph == "$":
+        # Rule 2: sentence end ($ declarative / ? interrogative, both final sil)
+        if ph in {"$", "?"}:
             # Find last sil in Julius (should be the final entry)
             for k in range(n_julius - 1, -1, -1):
                 if julius_phonemes[k] == "sil":
@@ -330,8 +330,8 @@ def _phoneme_distance(ph_julius: str, ph_pyopenjtalk: str) -> float:
     # Devoiced vowel: A->a, I->i, etc.
     if ph_pyopenjtalk in _DEVOICED_TO_VOICED and ph_julius == _DEVOICED_TO_VOICED[ph_pyopenjtalk]:
         return 0.5
-    # sil matches ^ or $
-    if ph_julius == "sil" and ph_pyopenjtalk in {"^", "$"}:
+    # sil matches ^ (utterance start), $ (declarative end) or ? (interrogative end)
+    if ph_julius == "sil" and ph_pyopenjtalk in {"^", "$", "?"}:
         return 0.0
     # pau matches _
     if ph_julius == "pau" and ph_pyopenjtalk == "_":
@@ -347,8 +347,15 @@ def align_julius_with_pyopenjtalk_dtw(
     """DTW-based fallback alignment between Julius and pyopenjtalk phonemes.
 
     Uses dynamic time warping to find the optimal alignment between the two
-    sequences, skipping prosody-only symbols (#, [, ], ?) which receive
+    sequences, skipping prosody-only symbols (#, [, ]) which receive
     duration=0.
+
+    When multiple Julius phones align to one pyopenjtalk phone (e.g. Julius
+    split a phone into several segments), the skipped Julius phones' durations
+    are summed onto the pyopenjtalk phone matched immediately to their left,
+    so no frames are lost. The global sum repair in
+    ``build_duration_array_with_blanks`` remains as a final safety net for
+    rounding differences.
 
     Args:
         julius_phonemes:     Mapped Julius phonemes (pyopenjtalk-compatible).
@@ -369,7 +376,7 @@ def align_julius_with_pyopenjtalk_dtw(
     non_prosody_indices = []
     non_prosody_phones = []
     for i, ph in enumerate(pyopenjtalk_phonemes):
-        if ph not in {"#", "[", "]", "?"}:
+        if ph not in {"#", "[", "]"}:
             non_prosody_indices.append(i)
             non_prosody_phones.append(ph)
 
@@ -397,6 +404,7 @@ def align_julius_with_pyopenjtalk_dtw(
 
     # Backtrace
     i, j = n_np, n_j
+    pending = 0  # durations of skipped Julius phones awaiting local assignment
     while i > 0 and j > 0:
         d = _phoneme_distance(julius_phonemes[j - 1], non_prosody_phones[i - 1])
         c_match = cost[i - 1][j - 1]
@@ -405,16 +413,23 @@ def align_julius_with_pyopenjtalk_dtw(
 
         best = min(c_match, c_skip_j, c_skip_p)
         if best == c_match:
-            # Match: assign Julius duration to pyopenjtalk phone
+            # Match: assign Julius duration to pyopenjtalk phone, plus the
+            # durations of any Julius phones skipped since the previous match
+            # (many-to-one: their frames belong to this phone locally, rather
+            # than being re-added globally by build_duration_array_with_blanks)
             orig_idx = non_prosody_indices[i - 1]
-            result[orig_idx] = julius_durations[j - 1]
+            result[orig_idx] = julius_durations[j - 1] + pending
+            pending = 0
             i -= 1
             j -= 1
         elif best == c_skip_j:
             # pyopenjtalk phone had no Julius match -> duration=0
             i -= 1
         else:
-            # Julius phone unmatched (skip it)
+            # Julius phone unmatched: carry its duration to the nearest matched
+            # pyopenjtalk phone on its left (the next match in backtrace order).
+            # The path always ends with a match at (1,1), so pending is never lost.
+            pending += julius_durations[j - 1]
             j -= 1
 
     # Remaining pyopenjtalk phones get duration=0 (already initialized)

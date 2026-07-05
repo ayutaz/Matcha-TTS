@@ -17,7 +17,7 @@ def load_json_safe(path):
     p = Path(path)
     if not p.exists():
         return None
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def generate_report(report_dir):
@@ -58,7 +58,7 @@ def main(argv=None):
 
     output_path = Path(args.output) if args.output else report_dir / "eval_report.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Report saved to {output_path}")
 
     # Print summary

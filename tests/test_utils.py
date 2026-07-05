@@ -7,6 +7,7 @@ import torch
 
 matplotlib.use("Agg")
 
+from matcha.utils.audio import mel_spectrogram
 from matcha.utils.model import (
     denormalize,
     duration_loss,
@@ -278,14 +279,26 @@ class TestNormalizeDenormalize:
         out = normalize(data, 3, 2)
         assert torch.allclose(out, torch.full((1, 2, 3), 1.0))
 
-    def test_denormalize_int_scalar_raises(self):
-        """Pin current behaviour: normalize() special-cases (float, int) scalars but
-        denormalize() only special-cases float, so a Python int falls through to
-        mu.unsqueeze(-1) and raises AttributeError. Suspected upstream bug — kept as-is.
+    def test_denormalize_accepts_int_scalar(self):
+        """denormalize() must special-case (float, int) scalars symmetrically with
+        normalize(); an int mu/std used to fall through to mu.unsqueeze(-1) and
+        raise AttributeError.
         """
         data = torch.randn(1, 2, 3)
-        with pytest.raises(AttributeError):
-            denormalize(data, 3, 2)
+        out = denormalize(data, 3, 2)
+        assert torch.allclose(out, data * 2 + 3)
+
+    def test_float64_ndarray_stats_keep_data_dtype(self):
+        """float64 ndarray mu/std must be cast to data.dtype (like the list branch)
+        instead of silently promoting the float32 mel batch to float64."""
+        data = _make_mel_batch()
+        mu = np.linspace(-6.0, -1.0, 80)  # float64 by default
+        std = np.linspace(0.5, 2.5, 80)
+        normed = normalize(data, mu, std)
+        assert normed.dtype == torch.float32
+        out = denormalize(normed, mu, std)
+        assert out.dtype == torch.float32
+        assert torch.allclose(out, data, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +330,73 @@ class TestDurationLoss:
         full = duration_loss(logw, logw_, torch.tensor([4, 4]))
         half = duration_loss(logw, logw_, torch.tensor([2, 2]))
         assert half.item() == pytest.approx(2 * full.item())
+
+
+# ---------------------------------------------------------------------------
+# mel_spectrogram cache keys
+# ---------------------------------------------------------------------------
+
+
+def _reference_mel(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax):
+    """Cache-free reimplementation of mel_spectrogram with fresh librosa filters."""
+    from librosa.filters import mel as librosa_mel_fn
+
+    mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
+    mel = torch.from_numpy(mel).float()
+    pad = int((n_fft - hop_size) / 2)
+    y = torch.nn.functional.pad(y.unsqueeze(1), (pad, pad), mode="reflect").squeeze(1)
+    spec = torch.stft(
+        y,
+        n_fft,
+        hop_length=hop_size,
+        win_length=win_size,
+        window=torch.hann_window(win_size),
+        center=False,
+        pad_mode="reflect",
+        normalized=False,
+        onesided=True,
+        return_complex=True,
+    )
+    spec = torch.view_as_real(spec)
+    spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-9)
+    return torch.log(torch.clamp(torch.matmul(mel, spec), min=1e-5))
+
+
+class TestMelSpectrogramCache:
+    """The module-level mel_basis/hann_window caches used to be keyed only by
+    (fmax, device), so a later call with equal fmax but a different
+    n_fft/win_size/num_mels/sampling_rate silently reused a stale filterbank
+    and window. The keys must cover every shape-relevant parameter — this
+    branch runs both the 22050Hz training config and a 16kHz Julius config."""
+
+    CFG_22K = {"n_fft": 1024, "num_mels": 80, "sampling_rate": 22050, "hop_size": 256, "win_size": 1024}
+    CFG_16K = {"n_fft": 512, "num_mels": 80, "sampling_rate": 16000, "hop_size": 160, "win_size": 512}
+
+    def test_second_config_with_equal_fmax_not_served_stale_cache(self):
+        torch.manual_seed(7)
+        y22 = torch.randn(1, 22050).clamp(-1.0, 1.0)
+        y16 = torch.randn(1, 16000).clamp(-1.0, 1.0)
+        out22 = mel_spectrogram(y22, fmin=0, fmax=None, **self.CFG_22K)
+        out16 = mel_spectrogram(y16, fmin=0, fmax=None, **self.CFG_16K)
+        assert torch.allclose(out22, _reference_mel(y22, fmin=0, fmax=None, **self.CFG_22K), atol=1e-5)
+        assert torch.allclose(out16, _reference_mel(y16, fmin=0, fmax=None, **self.CFG_16K), atol=1e-5)
+
+    def test_same_shape_different_sampling_rate_uses_fresh_filterbank(self):
+        """Same n_fft/win_size but a different sampling_rate must not share a
+        mel filterbank — the shapes match, so stale reuse is silent."""
+        torch.manual_seed(8)
+        y = torch.randn(1, 22050).clamp(-1.0, 1.0)
+        out_22k = mel_spectrogram(
+            y, sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=None
+        )
+        out_16k = mel_spectrogram(
+            y, sampling_rate=16000, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=None
+        )
+        ref_16k = _reference_mel(
+            y, sampling_rate=16000, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=None
+        )
+        assert torch.allclose(out_16k, ref_16k, atol=1e-5)
+        assert not torch.allclose(out_22k, out_16k)
 
 
 # ---------------------------------------------------------------------------

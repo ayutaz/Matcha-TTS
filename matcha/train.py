@@ -136,7 +136,12 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
                 trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
             else:
                 log.info(f"Weights-only checkpoint detected. Loading model weights from {ckpt_path}")
-                model.load_state_dict(ckpt["state_dict"])
+                # Direct load_state_dict bypasses on_load_checkpoint, so strip the stale
+                # SinusoidalPosEmb key (persistent in pre-rewrite checkpoints) here too
+                state_dict = ckpt["state_dict"]
+                for key in [k for k in state_dict if k.endswith("time_embeddings.emb_weights")]:
+                    del state_dict[key]
+                model.load_state_dict(state_dict)
                 del ckpt
                 trainer.fit(model=model, datamodule=datamodule)
         else:

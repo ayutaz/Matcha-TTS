@@ -407,6 +407,21 @@ class TestOutSizeCropping:
         _assert_finite_scalar_losses(dur_loss, prior_loss, diff_loss)
         assert attn.shape[-1] == out_size
 
+    def test_all_items_shorter_than_out_size(self):
+        """Regression: every y_length < out_size made max(y_cut_lengths) < out_size, so the
+        default sequence_mask length mismatched the out_size-allocated y_cut/attn_cut buffers
+        and forward crashed with a RuntimeError."""
+        torch.manual_seed(0)
+        model = _build_model()
+        x, x_lengths, y, y_lengths = _make_training_batch(x_lengths=(6, 4), y_lengths=(16, 12))
+        out_size = fix_len_compatibility(24)
+        assert out_size > int(y_lengths.max().item())
+
+        dur_loss, prior_loss, diff_loss, attn = model(x, x_lengths, y, y_lengths, out_size=out_size)
+
+        _assert_finite_scalar_losses(dur_loss, prior_loss, diff_loss)
+        assert attn.shape[-1] == out_size
+
 
 @pytest.mark.slow
 class TestLogPriorEquivalence:
@@ -554,15 +569,24 @@ class TestMultiSpeakerTrainingForward:
 
         _assert_finite_scalar_losses(dur_loss, prior_loss, diff_loss)
 
-    def test_float_speaker_ids_raise(self):
-        """forward() does not cast spks: float32 ids break the embedding lookup (dtype contract)."""
+    def test_float_speaker_ids_are_cast(self):
+        """forward() casts spks with .long() like synthesise(): float32 ids no longer
+        break the embedding lookup and produce the same losses as int64 ids."""
         torch.manual_seed(0)
         model = _build_model(n_spks=4, spk_emb_dim=64)
         x, x_lengths, y, y_lengths = _make_training_batch(x_lengths=(6, 4), y_lengths=(16, 12))
-        spks = torch.tensor([0.0, 3.0], dtype=torch.float32)
+        spks_float = torch.tensor([0.0, 3.0], dtype=torch.float32)
 
-        with pytest.raises(RuntimeError):
-            model(x, x_lengths, y, y_lengths, spks=spks)
+        torch.manual_seed(1)
+        dur_loss, prior_loss, diff_loss, _ = model(x, x_lengths, y, y_lengths, spks=spks_float)
+        _assert_finite_scalar_losses(dur_loss, prior_loss, diff_loss)
+
+        # Same seed + long ids yields identical losses: the cast is a pure dtype fix
+        torch.manual_seed(1)
+        dur_loss_l, prior_loss_l, diff_loss_l, _ = model(x, x_lengths, y, y_lengths, spks=spks_float.long())
+        assert dur_loss.item() == pytest.approx(dur_loss_l.item())
+        assert prior_loss.item() == pytest.approx(prior_loss_l.item())
+        assert diff_loss.item() == pytest.approx(diff_loss_l.item())
 
 
 @pytest.mark.slow
@@ -650,6 +674,71 @@ class TestSynthesiseDurationInvariant:
         out_slow = model.synthesise(x, x_lengths, n_timesteps=2, length_scale=2.0)
 
         assert torch.equal(out_slow["mel_lengths"], out_normal["mel_lengths"] * 2)
+
+
+@pytest.mark.slow
+class TestCheckpointStateDictCompat:
+    """Both checkpoint generations must load strictly after the SinusoidalPosEmb
+    persistent-buffer fix:
+
+    - pre-branch/upstream checkpoints (e.g. matcha_ljspeech.ckpt) never contained
+      ``time_embeddings.emb_weights`` — the buffer is now non-persistent, so it is
+      no longer expected in the state_dict;
+    - checkpoints saved while the buffer was persistent carry the stale key, which
+      BaseLightningClass.on_load_checkpoint strips before the strict load.
+    """
+
+    STALE_KEY = "decoder.estimator.time_embeddings.emb_weights"
+
+    def test_emb_weights_not_in_state_dict(self):
+        """The SinusoidalPosEmb cache is excluded from the model state_dict."""
+        model = _build_model()
+        assert not any(k.endswith("emb_weights") for k in model.state_dict())
+
+    def test_strict_load_of_pre_branch_state_dict(self):
+        """A state_dict without emb_weights (pre-branch checkpoint) loads with strict=True."""
+        model = _build_model()
+        fresh = _build_model()
+        result = fresh.load_state_dict(model.state_dict(), strict=True)
+        assert not result.missing_keys
+        assert not result.unexpected_keys
+
+    def test_on_load_checkpoint_strips_stale_emb_weights(self):
+        """A checkpoint carrying the stale persistent key (saved from this branch before
+        the fix) is cleaned by on_load_checkpoint and then loads with strict=True."""
+        model = _build_model()
+        state_dict = model.state_dict()
+        state_dict[self.STALE_KEY] = model.decoder.estimator.time_embeddings.emb_weights.clone()
+        checkpoint = {"epoch": 7, "state_dict": state_dict}
+
+        model.on_load_checkpoint(checkpoint)
+
+        assert self.STALE_KEY not in checkpoint["state_dict"]
+        assert model.ckpt_loaded_epoch == 7  # existing hook behavior is preserved
+        result = model.load_state_dict(checkpoint["state_dict"], strict=True)
+        assert not result.missing_keys
+        assert not result.unexpected_keys
+
+    def test_on_load_checkpoint_strips_stale_key_from_ema_payload(self):
+        """EMA checkpoints (WeightAveraging, jvs_fast/jvs_aligned) carry a second full
+        model copy under "current_model_state" that the callback strict-loads via
+        pl_module.load_state_dict; the stale key must be stripped there as well."""
+        model = _build_model()
+        stale = model.decoder.estimator.time_embeddings.emb_weights.clone()
+        state_dict = model.state_dict()
+        state_dict[self.STALE_KEY] = stale.clone()
+        current_model_state = model.state_dict()
+        current_model_state[self.STALE_KEY] = stale.clone()
+        checkpoint = {"epoch": 7, "state_dict": state_dict, "current_model_state": current_model_state}
+
+        model.on_load_checkpoint(checkpoint)
+
+        assert self.STALE_KEY not in checkpoint["state_dict"]
+        assert self.STALE_KEY not in checkpoint["current_model_state"]
+        # Same strict load WeightAveraging.on_load_checkpoint performs on resume
+        result = model.load_state_dict(checkpoint["current_model_state"], strict=True)
+        assert not result.missing_keys
+        assert not result.unexpected_keys
 
 
 class TestEnableGradientCheckpointing:
