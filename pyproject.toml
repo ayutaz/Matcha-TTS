@@ -119,7 +119,8 @@ target-version = "py310"
 exclude = [
     ".eggs", ".git", ".hg", ".mypy_cache", ".tox", ".venv",
     "_build", "buck-out", "build", "dist",
-    "logs", "data", "matcha/hifigan",
+    # アンカー必須: "data" だと matcha/data/ もベースネーム一致で除外される
+    "/logs", "/data", "matcha/hifigan",
 ]
 
 [tool.ruff.lint]

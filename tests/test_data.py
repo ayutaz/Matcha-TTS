@@ -132,6 +132,21 @@ class TestTextMelDataModuleInstantiation:
         dm.teardown(stage="test")
         dm.teardown(stage=None)
 
+    @pytest.mark.parametrize("load_durations", [True, False])
+    def test_dataloaders_pass_load_durations_to_collate(self, tmp_path, load_durations):
+        """load_durations must be wired through to the dataloader collate_fn so
+        that duration-return semantics stay consistent with the dataset."""
+        flist = tmp_path / "filelist.txt"
+        flist.write_text("dummy.wav|hello\n", encoding="utf-8")
+        hp = _default_hparams()
+        hp["train_filelist_path"] = str(flist)
+        hp["valid_filelist_path"] = str(flist)
+        hp["load_durations"] = load_durations
+        dm = TextMelDataModule(**hp)
+        dm.setup()
+        assert dm.train_dataloader().collate_fn.load_durations is load_durations
+        assert dm.val_dataloader().collate_fn.load_durations is load_durations
+
 
 # ---------------------------------------------------------------------------
 # TextMelBatchCollate — single-speaker

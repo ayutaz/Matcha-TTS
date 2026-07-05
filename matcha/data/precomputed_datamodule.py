@@ -212,9 +212,7 @@ class PrecomputedTextMelDataset(Dataset):
                     f"Re-run precompute_dataset.py with --durations-dir."
                 )
             if len(durations) != len(text):
-                raise ValueError(
-                    f"Duration length ({len(durations)}) != text length ({len(text)}) in {pt_path}"
-                )
+                raise ValueError(f"Duration length ({len(durations)}) != text length ({len(text)}) in {pt_path}")
 
         return {
             "x": text,

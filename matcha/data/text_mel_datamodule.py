@@ -50,7 +50,7 @@ class TextMelDataModule(LightningDataModule):
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
 
-    def setup(self, stage: Optional[str] = None):  # pylint: disable=unused-argument
+    def setup(self, stage: str | None = None):  # pylint: disable=unused-argument
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
 
         This method is called by lightning with both `trainer.fit()` and `trainer.test()`, so be
@@ -73,7 +73,7 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
-            language=getattr(self.hparams, 'language', 'en'),
+            language=getattr(self.hparams, "language", "en"),
         )
         self.validset = TextMelDataset(  # pylint: disable=attribute-defined-outside-init
             self.hparams.valid_filelist_path,
@@ -90,7 +90,7 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
-            language=getattr(self.hparams, 'language', 'en'),
+            language=getattr(self.hparams, "language", "en"),
         )
 
     def train_dataloader(self):
@@ -105,7 +105,7 @@ class TextMelDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
             drop_last=True,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
             **kwargs,
         )
 
@@ -120,11 +120,11 @@ class TextMelDataModule(LightningDataModule):
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
             **kwargs,
         )
 
-    def teardown(self, stage: Optional[str] = None):
+    def teardown(self, stage: str | None = None):
         """Clean up after fit or test."""
         pass  # pylint: disable=unnecessary-pass
 
@@ -132,7 +132,7 @@ class TextMelDataModule(LightningDataModule):
         """Extra things to save to checkpoint."""
         return {}
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: dict[str, Any]):
         """Things to do when loading checkpoint."""
         pass  # pylint: disable=unnecessary-pass
 
@@ -248,7 +248,7 @@ class TextMelBatchCollate:
     def __init__(self, n_spks, load_durations=False):
         self.n_spks = n_spks
         self.load_durations = load_durations
-        self._len_compat_cache: Dict[int, int] = {}
+        self._len_compat_cache: dict[int, int] = {}
 
     def _fix_len_compat(self, length):
         """Cached version of fix_len_compatibility."""
