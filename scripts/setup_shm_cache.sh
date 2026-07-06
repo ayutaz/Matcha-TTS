@@ -13,12 +13,15 @@
 
 set -euo pipefail
 
+# リポジトリルート（env MATCHA_ROOT で上書き可能。デフォルトはこのスクリプトの親ディレクトリ）
+MATCHA_ROOT="${MATCHA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 SHM_BASE="/dev/shm"
-JVS_WAVS_SRC="/data/Matcha-TTS/data/jvs/wavs"
+JVS_WAVS_SRC="${MATCHA_ROOT}/data/jvs/wavs"
 JVS_WAVS_CACHE="${SHM_BASE}/jvs_wavs"
-JULIUS_WORK_SRC="/data/Matcha-TTS/data/julius_work"
+JULIUS_WORK_SRC="${MATCHA_ROOT}/data/julius_work"
 JULIUS_WORK_CACHE="${SHM_BASE}/julius_work"
-PRECOMPUTED_ALIGNED_SRC="/data/Matcha-TTS/data/jvs_precomputed_aligned"
+PRECOMPUTED_ALIGNED_SRC="${MATCHA_ROOT}/data/jvs_precomputed_aligned"
 PRECOMPUTED_ALIGNED_CACHE="${SHM_BASE}/jvs_precomputed_aligned"
 
 show_status() {
