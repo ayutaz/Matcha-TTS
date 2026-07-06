@@ -95,9 +95,24 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
         wav_dir = tmp / "wav"
         wav_dir.mkdir()
 
-        # Symlink bin/ and models/ from segmentation-kit so that
-        # segment_julius.pl can find julius binary and acoustic models
-        (tmp / "bin").symlink_to(segkit_path / "bin")
+        # Build bin/ with a usable julius. segmentation-kit は Windows 用の
+        # bin/julius-4.3.1.exe しか同梱しておらず、segment_julius.pl が呼ぶ
+        # ./bin/julius-4.3.1 は Linux では存在しないため、システムの julius を
+        # その名前でシンボリックリンクする
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        segkit_bin = segkit_path / "bin"
+        if segkit_bin.is_dir():
+            for entry in segkit_bin.iterdir():
+                (bin_dir / entry.name).symlink_to(entry)
+        bundled_julius = bin_dir / "julius-4.3.1"
+        if not bundled_julius.exists() or not os.access(bundled_julius, os.X_OK):
+            system_julius = shutil.which("julius")
+            if system_julius is not None and Path(system_julius).exists():
+                bundled_julius.unlink(missing_ok=True)
+                bundled_julius.symlink_to(system_julius)
+            # julius が無い場合はそのまま実行する（実運用は check_prerequisites で
+            # 事前検証済み。テスト等では空 .lab 検出が失敗として報告する）
         (tmp / "models").symlink_to(segkit_path / "models")
 
         # Symlink .wav and .txt into the same wav/ directory
@@ -145,9 +160,15 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
         lab_dirs = [wav_dir, tmp / "lab", tmp]
         for name in name_set:
             found = False
+            empty = False
             for lab_dir in lab_dirs:
                 lab_file = lab_dir / f"{name}.lab"
                 if lab_file.exists():
+                    # julius が起動できない場合でも segment_julius.pl は空の .lab を
+                    # 作って正常終了するため、0バイトは失敗として扱う
+                    if lab_file.stat().st_size == 0:
+                        empty = True
+                        continue
                     # Copy to output directory
                     dest = output_path / f"{name}.lab"
                     shutil.copy2(str(lab_file), str(dest))
@@ -156,7 +177,8 @@ def run_segkit_batch(wav_files, txt_files, segkit_dir, output_dir, timeout=300):
                     break
             if not found:
                 stderr_snippet = result.stderr[-500:] if result.stderr else "(no stderr)"
-                errors.append((name, f"No .lab file produced. stderr: {stderr_snippet}"))
+                reason = "Empty .lab produced (julius failed to run?)" if empty else "No .lab file produced"
+                errors.append((name, f"{reason}. stderr: {stderr_snippet}"))
 
     return successes, errors
 
