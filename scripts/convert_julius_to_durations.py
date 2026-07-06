@@ -158,6 +158,9 @@ def _pyopenjtalk_to_julius_key(ph: str) -> str | None:
         return None
     if ph in _DEVOICED_TO_VOICED:
         return _DEVOICED_TO_VOICED[ph]
+    if ph == "v":
+        # Julius音響モデルにvは無く、ヴはバ行で整列される（normalize_vu_kana参照）
+        return "b"
     return ph
 
 

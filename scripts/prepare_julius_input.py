@@ -70,10 +70,13 @@ def text_to_katakana(text):
     """
     import pyopenjtalk
 
+    from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
     kana = pyopenjtalk.g2p(text, kana=True)
     # Remove punctuation and whitespace
     kana = _PUNCT_RE.sub("", kana)
-    return kana
+    # ヴ行はバ行へ正規化（yomi2voca はゔを変換できない）
+    return normalize_vu_kana(kana)
 
 
 def resample_to_16k(input_path, output_path):

@@ -46,7 +46,10 @@ _PUNCT_RE = re.compile(r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]�
 
 
 def katakana_to_hiragana(text: str) -> str:
-    """Convert katakana to hiragana."""
+    """Convert katakana to hiragana (ヴ行はバ行へ正規化)."""
+    from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
+    text = normalize_vu_kana(text)  # yomi2voca はゔを変換できない
     result = []
     for ch in text:
         cp = ord(ch)

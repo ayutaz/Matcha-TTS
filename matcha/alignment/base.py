@@ -29,6 +29,9 @@ def _corresponds(target_ph: str, julius_ph: str) -> bool:
         return True
     if _DEVOICED_TO_VOICED.get(target_ph) == julius_ph:
         return True
+    # ヴ: Julius音響モデルにvが無いためバ行で整列される（normalize_vu_kana参照）
+    if target_ph == "v" and julius_ph == "b":
+        return True
     # ^ = utterance start, $ = declarative end, ? = interrogative end
     if target_ph in {"^", "$", "?"} and julius_ph == "sil":
         return True

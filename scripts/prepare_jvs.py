@@ -310,7 +310,10 @@ def main():
 
         _PUNCT_RE = re.compile(r"[。、！？!?,.\-\s「」『』（）\(\)【】\[\]｛｝\{\}・…―─　\u3000]")
 
+        from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
         def katakana_to_hiragana(text):
+            text = normalize_vu_kana(text)  # ヴ→バ行（yomi2voca はゔを変換できない）
             return "".join(chr(ord(ch) - 0x60) if 0x30A1 <= ord(ch) <= 0x30F6 else ch for ch in text)
 
         print(f"\n[*] Generating hiragana text files for Julius in {julius_dir}...")

@@ -120,6 +120,28 @@ def map_julius_sequence(julius_phonemes: list[str]) -> list[str]:
     return [map_julius_phoneme(ph) for ph in julius_phonemes]
 
 
+# ヴ行カタカナ → バ行の置換テーブル。
+# Julius segmentation-kit の yomi2voca.pl は「ゔ」を変換できず（音響モデルにも
+# v 音素が無い）、pyopenjtalk-plus 自身も ヴ を b 音素で出力するため、
+# Julius 入力のかな生成時にバ行へ正規化して両者を一致させる。
+# 2文字の組み合わせを先に置換すること（「ヴ」単体が最後）。
+_VU_TO_BA: tuple[tuple[str, str], ...] = (
+    ("ヴァ", "バ"),
+    ("ヴィ", "ビ"),
+    ("ヴュ", "ビュ"),
+    ("ヴェ", "ベ"),
+    ("ヴォ", "ボ"),
+    ("ヴ", "ブ"),
+)
+
+
+def normalize_vu_kana(kana: str) -> str:
+    """カタカナ列のヴ行をバ行へ置換する（Julius forced alignment 入力用）。"""
+    for src, dst in _VU_TO_BA:
+        kana = kana.replace(src, dst)
+    return kana
+
+
 def get_unmapped_phonemes(julius_phonemes: list[str]) -> set[str]:
     """マッピングされていないJulius音素を返す（デバッグ用）。
 

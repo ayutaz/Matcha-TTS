@@ -403,3 +403,33 @@ class TestJuliusPhoneCoverage:
 
         extra = julius_keys - expected_julius_phonemes
         assert not extra, f"Unexpected keys in mapping: {sorted(extra)}"
+
+
+class TestNormalizeVuKana:
+    """normalize_vu_kana: ヴ行カタカナ→バ行の正規化（Julius入力用）。"""
+
+    def test_vu_combinations(self):
+        from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
+        assert normalize_vu_kana("ヴァイオリン") == "バイオリン"
+        assert normalize_vu_kana("ヴィーナス") == "ビーナス"
+        assert normalize_vu_kana("ヴェルディ") == "ベルディ"
+        assert normalize_vu_kana("ヴォルガ") == "ボルガ"
+        assert normalize_vu_kana("ヴュー") == "ビュー"
+
+    def test_vu_alone_maps_to_bu(self):
+        from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
+        # 単体のヴ（後続が小書き母音でない）はブ
+        assert normalize_vu_kana("ラヴ") == "ラブ"
+
+    def test_text_without_vu_unchanged(self):
+        from matcha.text.julius_to_pyopenjtalk import normalize_vu_kana
+
+        assert normalize_vu_kana("コンニチハ") == "コンニチハ"
+
+    def test_corresponds_v_to_b(self):
+        from matcha.alignment.base import _corresponds
+
+        assert _corresponds("v", "b")
+        assert not _corresponds("v", "p")
