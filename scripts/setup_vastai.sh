@@ -16,6 +16,16 @@ BRANCH="${MATCHA_BRANCH:-feature/japanese-support}"
 REPO_URL="${MATCHA_REPO:-https://github.com/ayutaz/Matcha-TTS.git}"
 JVS_DATASET="${JVS_DATASET:-ayousanz/jvs-ver1-raw}"
 
+echo "== [0/6] connectivity check =="
+# 一部のvast.aiホストはhuggingface.coをDNS/SNIレベルで遮断している（2026-07に遭遇）。
+# HFはデータセット取得とcheckpointバックアップの生命線なので、重い処理の前に検査する
+if ! curl -fsS --max-time 15 -o /dev/null "https://huggingface.co/api/models?limit=1"; then
+    echo "ERROR: huggingface.co に接続できません。このホストはHFを遮断している可能性があります。"
+    echo "       別ホストのインスタンスに乗り換えてください（vastai search offers で host_id が異なるもの）"
+    exit 2
+fi
+echo "huggingface.co OK"
+
 echo "== [1/6] apt packages =="
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq julius perl git curl tmux unzip make build-essential espeak-ng
