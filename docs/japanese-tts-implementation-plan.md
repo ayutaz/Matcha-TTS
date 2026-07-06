@@ -31,7 +31,7 @@
 
 | ファイル | 変更種別 | 内容 |
 |---------|---------|------|
-| `pyproject.toml` | 編集 | `japanese = ["pyopenjtalk-plus"]` optional dependency追加 |
+| `pyproject.toml` | 編集 | `pyopenjtalk-plus` 依存追加（当初は `[japanese]` extra、2026-07に本体依存へ昇格） |
 | `matcha/text/symbols.py` | 編集 | `symbols_ja` (52シンボル) 追加 |
 | `matcha/text/cleaners.py` | 編集 | `japanese_cleaners` + `_fullcontext_to_prosody` 追加 |
 | `matcha/text/__init__.py` | 編集 | `language` パラメータ追加、スペース区切りトークン対応 |
@@ -67,7 +67,7 @@ Text → japanese_cleaners → pyopenjtalk 韻律記号付き音素列 → 52シ
 
 - **後方互換性**: 英語の既存機能を壊さないよう、日本語対応は独立したシンボルテーブル・クリーナーとして追加する
 - **複数文字音素**: 日本語音素には `ch`, `sh`, `cl`, `pau` 等の複数文字トークンがあるため、現在の1文字ずつ処理する `text_to_sequence()` の改修が必要
-- **依存関係**: pyopenjtalkはoptional dependency（`[japanese]` extra）として追加し、英語のみのユーザーへの影響を最小化する
+- **依存関係**: pyopenjtalk-plusは当初optional dependency（`[japanese]` extra）として追加したが、日本語サポートが本ブランチの主目的であることと `uv sync --all-groups` でextraが漏れる事故を防ぐため、2026-07に本体依存（`[project.dependencies]`）へ昇格した。「何」の読み分け（Nani prediction）用に `onnxruntime` も本体依存に含む。コード側は遅延importを維持（英語のみの利用時は辞書をロードしない）
 
 ---
 
@@ -463,7 +463,7 @@ def _fullcontext_to_prosody(labels):
 
 def japanese_cleaners(text):
     """日本語テキスト→韻律記号付き音素列への変換。"""
-    import pyopenjtalk  # 遅延import（optional dependency）
+    import pyopenjtalk  # 遅延import（英語のみの利用時は辞書をロードしない）
     labels = pyopenjtalk.extract_fullcontext(text)
     phonemes = _fullcontext_to_prosody(labels)
     return " ".join(phonemes)
@@ -714,7 +714,7 @@ model.load_state_dict(state_dict, strict=False)
 
 ### Phase 1: テキスト処理パイプライン ✅ 完了
 
-1. ✅ `pyproject.toml` に optional dependency 追加: `japanese = ["pyopenjtalk-plus"]`
+1. ✅ `pyproject.toml` に `pyopenjtalk-plus` 依存追加（当初 `[japanese]` extra、2026-07に本体依存へ昇格）
 2. ✅ `symbols.py` に `symbols_ja` (52シンボル) を追加（既存の `symbols` は維持）
 3. ✅ `cleaners.py` に `japanese_cleaners` + `_fullcontext_to_prosody` 実装（正規表現パーサー約60行）
 4. ✅ `__init__.py` を改修: `language` keyword-only引数、スペース区切りトークン対応、言語別マッピングキャッシュ

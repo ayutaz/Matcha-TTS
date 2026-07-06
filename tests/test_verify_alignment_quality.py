@@ -104,7 +104,7 @@ def _create_test_data(tmp_path, texts_and_health, *, speaker="jvs001"):
         dur = _make_duration_for_text(text, healthy=healthy)
         np.save(str(dur_dir / f"{name}.npy"), dur)
 
-    filelist_path.write_text("\n".join(lines) + "\n")
+    filelist_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(filelist_path), dur_dir
 
 
@@ -200,7 +200,7 @@ class TestVerifyAlignmentQuality:
         dur_dir.mkdir()
         fl_path = tmp_path / "fl.txt"
         # Filelist references a file, but no .npy exists
-        fl_path.write_text("/data/wavs/jvs001/UTT0000.wav|0|こんにちは\n")
+        fl_path.write_text("/data/wavs/jvs001/UTT0000.wav|0|こんにちは\n", encoding="utf-8")
 
         report = generate_report(dur_dir, str(fl_path))
 
@@ -261,7 +261,7 @@ class TestVerifyAlignmentQuality:
 
         assert exit_code == 0
         assert report_path.exists()
-        with open(report_path) as f:
+        with open(report_path, encoding="utf-8") as f:
             data = json.load(f)
         assert data["total_in_filelist"] == 1
         assert data["total_loaded"] == 1
@@ -289,7 +289,7 @@ class TestVerifyAlignmentQuality:
 
         text = "こんにちは"
         wav_path = "/data/wavs/jvs001/UTT0000.wav"
-        fl_path.write_text(f"{wav_path}|0|{text}\n")
+        fl_path.write_text(f"{wav_path}|0|{text}\n", encoding="utf-8")
 
         name = make_output_name(wav_path)
         # Create a duration array with wrong length (too short)

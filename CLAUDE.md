@@ -6,17 +6,19 @@
 
 Matcha-TTS は、条件付きフローマッチングに基づく高速な非自己回帰型テキスト音声合成システムです（ICASSP 2024）。ODEベースのアプローチによりテキストからメルスペクトログラムを生成し、HiFi-GANボコーダを通じて波形に変換します。
 
-**日本語サポート**: JVSコーパス（100話者）による日本語音声合成に対応。pyopenjtalkによるフルコンテキストラベルからの音素変換、55シンボルの日本語語彙テーブルを実装。
+**日本語サポート**: JVSコーパス（100話者）による日本語音声合成に対応。pyopenjtalk-plus（本体依存）によるフルコンテキストラベルからの音素変換、55シンボルの日本語語彙テーブルを実装。onnxruntimeも本体依存に含み、「何」の読み分け（Nani prediction）が有効。
 
 ## よく使うコマンド
 
 ### セットアップ（uv）
 ```bash
-uv sync                      # 依存関係をインストール（Cython拡張を含む）
+uv sync                      # 依存関係をインストール（Cython拡張・pyopenjtalk-plusを含む）
 uv sync --all-groups         # 全開発依存関係をインストール
 uv sync --extra app          # Gradio Web UIの依存関係を追加
-uv sync --extra onnx         # ONNXサポートの依存関係を追加
+uv sync --extra onnx         # ONNXエクスポートの依存関係を追加
 ```
+- Pythonは**3.12固定**（`requires-python = ">=3.12,<3.13"`、`.python-version`）。uvが自動で3.12を取得する
+- 日本語g2p（pyopenjtalk-plus + onnxruntime）は本体依存のため `uv sync` だけで入る（旧 `--extra japanese` は廃止）
 
 ### JVSデータ準備（新環境セットアップ）
 ```bash
