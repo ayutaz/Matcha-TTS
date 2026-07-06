@@ -18,7 +18,7 @@ JVS_DATASET="${JVS_DATASET:-ayousanz/jvs-ver1-raw}"
 
 echo "== [1/6] apt packages =="
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq julius perl git curl tmux unzip make build-essential
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq julius perl git curl tmux unzip make build-essential espeak-ng
 
 echo "== [2/6] uv =="
 if ! command -v uv >/dev/null 2>&1; then
@@ -64,7 +64,7 @@ echo "== [6/6] verification =="
 nvidia-smi || echo "WARNING: nvidia-smi failed（GPU未検出）"
 julius -help >/dev/null 2>&1 && echo "julius OK"
 df -h /dev/shm
-make test
+PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1 make test
 
 echo ""
 echo "setup complete. 次: docs/next-steps-plan.md Phase 1（データ準備）"
