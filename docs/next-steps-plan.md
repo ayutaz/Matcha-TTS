@@ -62,6 +62,15 @@ Phase 5: マージ後の拡張（任意バックログ）
 
 ### セットアップ手順（ssh後、**tmux内で**実行）
 
+**ワンライナー（推奨）** — 以下の手動手順を `scripts/setup_vastai.sh` が全自動で実行する（JVSのHF privateダウンロード込み）:
+
+```bash
+export HF_TOKEN=hf_xxx   # writeスコープのトークン
+curl -fsSL https://raw.githubusercontent.com/ayutaz/Matcha-TTS/feature/japanese-support/scripts/setup_vastai.sh | bash
+```
+
+手動で進める場合:
+
 ```bash
 # 基本ツール（rootコンテナが標準のためsudo不要な場合が多い）
 apt-get update && apt-get install -y julius perl git curl tmux
@@ -93,11 +102,11 @@ make test                            # 高速テストスイート（全パス�
 
 | 案 | 方法 | 位置づけ |
 |----|------|---------|
-| A | 公式配布元（Google Drive、ライセンス同意）からインスタンスへ直接ダウンロード（~3GB） | 初回 |
-| B | jvs_ver1をHF **private**データセット（例: `ayousanz/jvs-ver1-raw`）に一度アップし、以後 `hf download` で取得 | **再構築の定番経路として推奨**。JVSは再配布不可ライセンスのため必ずprivate維持 |
-| C | 開発PCから scp/rsync | 手元にデータがあり回線が速い場合 |
+| A | 公式配布元（Google Drive、ライセンス同意）からインスタンスへ直接ダウンロード（~3GB） | フォールバック |
+| B | HF **private**データセット `ayousanz/jvs-ver1-raw` から `hf download` で取得 | **標準経路（2026-07-06に開発PCからアップロード済み）**。JVSは再配布不可ライセンスのため必ずprivate維持 |
+| C | 開発PCから scp/rsync | フォールバック |
 
-推奨運用: 初回は案Aで取得し、**その足で案BのHF private化までやっておく**。インスタンスは使い捨てなので、次回以降の環境再構築を数分にできる。
+案Bは `scripts/setup_vastai.sh` に組み込み済み（`data/jvs_ver1` へ自動展開）。
 
 ### 完了条件
 
@@ -203,17 +212,16 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python matcha/train.py \
 # HF privateリポジトリを作成（初回のみ）
 hf repo create matcha-tts-jvs-ja --private
 
-# 学習中の定期バックアップ（tmuxの別ペインで起動しっぱなしにする）
-while true; do
-  RUN_DIR=$(ls -td logs/train/jvs_aligned/runs/* | head -1)
-  hf upload ayousanz/matcha-tts-jvs-ja "$RUN_DIR/checkpoints/last.ckpt" jvs_aligned/last.ckpt
-  sleep 10800   # 3時間ごと（プリエンプト・ホスト障害への保険）
-done
+# 学習中の定期バックアップ（tmuxの別ペインで起動しっぱなしにする。3時間ごと）
+bash scripts/backup_checkpoints_hf.sh jvs_aligned
 
 # 学習完了時: 設定スナップショットとTensorBoardログも同梱
+RUN_DIR=$(ls -td logs/train/jvs_aligned/runs/* | head -1)
 hf upload ayousanz/matcha-tts-jvs-ja "$RUN_DIR/.hydra" jvs_aligned/hydra
 hf upload ayousanz/matcha-tts-jvs-ja "$RUN_DIR" jvs_aligned/tensorboard --include "*.tfevents.*"
 ```
+
+リポジトリは作成済み: checkpoint用 `ayousanz/matcha-tts-jvs-ja`（model, private）/ データ用 `ayousanz/jvs-ver1-raw`（dataset, private）。
 
 ### 完了条件
 
