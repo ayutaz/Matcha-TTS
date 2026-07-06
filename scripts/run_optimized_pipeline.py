@@ -635,32 +635,37 @@ def main():
             log.error("Source directory does not exist: %s", pt_source)
             return 1
 
-        # Check /dev/shm available space
-        try:
-            shm_stat = shutil.disk_usage("/dev/shm")
-            source_size = sum(f.stat().st_size for f in pt_source.rglob("*.pt"))
-            log.info(
-                "/dev/shm: %.1f GB free, source data: %.1f GB",
-                shm_stat.free / (1024**3),
-                source_size / (1024**3),
-            )
-            if source_size > shm_stat.free * 0.9:
-                log.warning(
-                    "Insufficient /dev/shm space! Need %.1f GB, have %.1f GB free. Skipping shm copy.",
-                    source_size / (1024**3),
+        if pt_source.resolve() == shm_target.resolve():
+            # --pt-output-dir が既に /dev/shm のターゲットと同一の場合、
+            # rmtree(dst) が生成直後の .pt を消してしまうためコピー不要
+            log.info("pt-output-dir is already the /dev/shm target; skipping copy")
+        else:
+            # Check /dev/shm available space
+            try:
+                shm_stat = shutil.disk_usage("/dev/shm")
+                source_size = sum(f.stat().st_size for f in pt_source.rglob("*.pt"))
+                log.info(
+                    "/dev/shm: %.1f GB free, source data: %.1f GB",
                     shm_stat.free / (1024**3),
+                    source_size / (1024**3),
                 )
-            else:
-                # Copy with directory structure preserved
-                if shm_target.exists():
-                    log.info("Removing existing /dev/shm data at %s", shm_target)
-                    shutil.rmtree(str(shm_target))
-                shutil.copytree(str(pt_source), str(shm_target))
-                copied_count = sum(1 for _ in shm_target.rglob("*.pt"))
-                log.info("Copied %d .pt files to %s", copied_count, shm_target)
-        except Exception as e:
-            log.error("Failed to copy to /dev/shm: %s", e)
-            # Non-fatal: training can still use disk-based files
+                if source_size > shm_stat.free * 0.9:
+                    log.warning(
+                        "Insufficient /dev/shm space! Need %.1f GB, have %.1f GB free. Skipping shm copy.",
+                        source_size / (1024**3),
+                        shm_stat.free / (1024**3),
+                    )
+                else:
+                    # Copy with directory structure preserved
+                    if shm_target.exists():
+                        log.info("Removing existing /dev/shm data at %s", shm_target)
+                        shutil.rmtree(str(shm_target))
+                    shutil.copytree(str(pt_source), str(shm_target))
+                    copied_count = sum(1 for _ in shm_target.rglob("*.pt"))
+                    log.info("Copied %d .pt files to %s", copied_count, shm_target)
+            except Exception as e:
+                log.error("Failed to copy to /dev/shm: %s", e)
+                # Non-fatal: training can still use disk-based files
 
         timings["Copy to /dev/shm"] = time.time() - t0
 
