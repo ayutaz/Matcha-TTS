@@ -68,6 +68,7 @@ def process_text(text: str, device: str = "cpu"):
     return result["x"], result["x_lengths"]
 
 
+@torch.inference_mode()
 def generate_sample(
     model,
     vocoder,
@@ -79,7 +80,13 @@ def generate_sample(
     clamp_boundary_blanks: bool = True,
     device: str = "cpu",
 ) -> dict:
-    """Generate a single speech sample."""
+    """Generate a single speech sample.
+
+    Wrapped in ``torch.inference_mode`` so the vocoder call runs in the same
+    mode as ``model.synthesise`` (also inference_mode); otherwise passing the
+    inference-mode ``mel`` into the grad-tracking vocoder raises
+    "Inference tensors cannot be saved for backward".
+    """
     x, x_lengths = process_text(text, device)
 
     spks = torch.tensor([spk_id], dtype=torch.long, device=device) if model.n_spks > 1 else None
