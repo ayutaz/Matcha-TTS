@@ -33,6 +33,10 @@ if [ ! -d Matcha-TTS ] && [ ! -f pyproject.toml ]; then
 elif [ -d Matcha-TTS ]; then
     cd Matcha-TTS
 fi
+# 再実行時は最新コミットへ更新（一時的なネットワークエラーに備えて1回リトライ）
+git fetch origin "$BRANCH" || { sleep 5; git fetch origin "$BRANCH"; }
+git checkout "$BRANCH"
+git merge --ff-only "origin/$BRANCH"
 uv sync --all-groups
 bash scripts/setup_julius.sh
 
