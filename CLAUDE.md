@@ -393,6 +393,8 @@ MASをバイパスし、外部forced alignerで正確なphoneme durationを事�
 - Julius alignment側の `?` 対応は `scripts/convert_julius_to_durations.py` / `matcha/alignment/base.py` で実装済み（`?` は疑問文の文末silとして `$` と同様にdurationを持つ。duration=0の韻律記号は `#` `[` `]` のみ）
 
 ### JVSデータの注意点
+- **Juliusアライメントの既知の欠損（~24件、0.18%）**: 全角英字（Ａ/Ｈ）、LOANWORD128の特殊モーラ（てゃ/うょ/るぁ/ぐぉ等）、全角マイナス「−」、探索失敗（1件）はyomi2voca/Julius側で整列不能のため.pt生成から除外される（12,997中12,973件が学習に使用される）。ヴ行は`normalize_vu_kana`でバ行に正規化済み（pyopenjtalk自身もヴをb音素で出力するため整合する）
+- **segmentation-kitはLinux用Juliusバイナリを同梱しない**: `bin/julius-4.3.1.exe`（Windows用）のみ。`run_segkit_batch`がシステムの`julius`（apt版）を`bin/julius-4.3.1`としてシンボリックリンクする。juliusが起動できない場合もsegment_julius.plは空.labを作ってexit 0するため、0バイト.labはエラーとして扱う（実装済み）
 - **無音トリミング必須**: JVSコーパスは各発話の先頭/末尾に~500msの無音を含む。`prepare_jvs.py`で自動トリミング（`top_db=30`、50msマージン）
 - **mel統計量**: トリミング後のデータで再計算が必要（`mel_mean: -6.550095`, `mel_std: 2.383771`）
 - **blank[0] Duration爆発**: MASが先頭blankに大量フレームを割り当て、Duration Predictorがこれを学習する。推論時のclamp（max=3.0）で対症対応済みだが、根本原因はMASアライメント退化問題（上記参照）
