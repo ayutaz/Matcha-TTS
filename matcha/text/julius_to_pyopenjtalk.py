@@ -128,7 +128,9 @@ def map_julius_sequence(julius_phonemes: list[str]) -> list[str]:
 _VU_TO_BA: tuple[tuple[str, str], ...] = (
     ("ヴァ", "バ"),
     ("ヴィ", "ビ"),
+    ("ヴャ", "ビャ"),
     ("ヴュ", "ビュ"),
+    ("ヴョ", "ビョ"),
     ("ヴェ", "ベ"),
     ("ヴォ", "ボ"),
     ("ヴ", "ブ"),
