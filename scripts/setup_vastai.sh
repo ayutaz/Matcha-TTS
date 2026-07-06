@@ -18,7 +18,7 @@ JVS_DATASET="${JVS_DATASET:-ayousanz/jvs-ver1-raw}"
 
 echo "== [1/6] apt packages =="
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq julius perl git curl tmux unzip make
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq julius perl git curl tmux unzip make build-essential
 
 echo "== [2/6] uv =="
 if ! command -v uv >/dev/null 2>&1; then
