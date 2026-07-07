@@ -180,6 +180,10 @@ def main():
         opset_version=args.opset,
         export_params=True,
         do_constant_folding=True,
+        # Force the legacy TorchScript exporter. torch>=2.9 defaults to the dynamo
+        # exporter (torch.export.export), which fails on Matcha's synthesise() SymInt
+        # indexing. This module + opset_version were designed for the TorchScript path.
+        dynamo=False,
     )
     print(f"[🍵] ONNX model exported to  {args.output}")
 

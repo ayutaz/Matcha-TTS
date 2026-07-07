@@ -155,7 +155,17 @@ uv run python3 -m matcha.onnx.export model.ckpt output.onnx --n-timesteps 5
 uv run python3 -m matcha.onnx.export model.ckpt output.onnx --n-timesteps 5 --quantize  # INT8量子化
 uv run python3 -m matcha.onnx.infer output.onnx --text "hello" --output-dir ./outputs
 uv run python3 -m matcha.onnx.infer output.onnx --quantized --text "hello"              # INT8モデル使用
+
+# 日本語モデル + WaveNeXtボコーダを単一グラフに埋め込み（CPU/モバイル配布向け、iSTFT無し）
+uv run python3 -m matcha.onnx.export jvs_aligned.ckpt jvs_wavenext.onnx --n-timesteps 5 \
+  --vocoder-name wavenext --vocoder-checkpoint-path <BSC-LT/wavenext-mel pytorch_model.bin>
 ```
+- **依存**: `uv sync --extra onnx`（`onnx` + `onnxruntime` + `onnxscript`）。torch≥2.9は`torch.onnx.export`を
+  dynamo経路に流すが、Matchaのsynthesise() SymInt indexingで失敗するため`export.py`は`dynamo=False`で
+  旧TorchScript exporter（opset17）に固定している
+- **WaveNeXtボコーダ**（`--vocoder-name wavenext`、`matcha/wavenext/`）: iSTFT無しのConvNeXt+線形ヘッドで
+  ONNX単一グラフ埋め込み可（非対応op無し・onnx.checker PASS・ONNX-CPU RTF 0.093）。VocosはiSTFTがONNX非対応で
+  除外。音質は現行HiFi-GAN同等以上。調査は `docs/vocoder-improvement-survey.md`
 
 ## アーキテクチャ
 

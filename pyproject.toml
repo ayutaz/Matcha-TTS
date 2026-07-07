@@ -57,6 +57,9 @@ dependencies = [
 onnx = [
     "onnxruntime>=1.14.0",
     "onnx>=1.14.0",
+    # torch>=2.9 routes torch.onnx.export through the dynamo path unless dynamo=False;
+    # the exporter still imports onnxscript at module load, so it is required to export.
+    "onnxscript>=0.7.0",
 ]
 onnx-gpu = [
     "onnxruntime-gpu>=1.14.0",

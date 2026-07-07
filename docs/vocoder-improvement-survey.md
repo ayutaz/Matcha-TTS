@@ -214,6 +214,30 @@ WaveNeXtゼロショット vs 現行HiFi-GAN で paired UTMOS 比較:
 fmax引き上げの前に最終確認したい場合はインスタンス（JVS .pt保有）で実施可能。ただしBigVGANプローブ＋前回データで
 「fmax構造天井」の結論は十分堅い。
 
+## 4-quater. Phase C: WaveNeXt ONNX化（2026-07-07、実証完了）
+
+音質は現状受容（濁り=fmax構造天井、ボコーダでは不可）とし、WaveNeXtのデプロイ利点を確定。
+
+`python -m matcha.onnx.export <jvs_aligned.ckpt> out.onnx --vocoder-name wavenext --vocoder-checkpoint-path <bin>`
+で **Matcha + WaveNeXt を単一ONNXグラフに埋め込み成功**:
+
+| 項目 | 結果 |
+|------|------|
+| onnx.checker | **PASSED（非対応op無し）** |
+| STFT/DFT op | **無し**（＝iSTFT-freeの実証。Vocosなら必ず出る） |
+| グラフ出力 | `['wav', 'wav_lengths']`（end-to-end、vocoder埋め込み） |
+| opset / サイズ | 17 / 141MB（音響+ボコーダ） |
+| ONNX-CPU RTF | **0.093**（n_timesteps=5、Matcha音響+WaveNeXt全体、実時間~10倍速） |
+| 生成音声 | 有効（finite、正常range） |
+
+**export.py修正（torch 2.10互換、既存問題）**: torch≥2.9は`torch.onnx.export`をdynamo経路に流すが、
+Matchaのsynthesise()のSymInt indexingで失敗する。`dynamo=False`で旧TorchScript exporter（opset17、
+本モジュールが設計された経路）に固定して解決。これはWaveNeXt非依存の既存互換問題。
+依存: `onnx` + `onnxscript`（`[onnx]` extraに追加済み）。
+
+**結論**: WaveNeXtは (品質同等以上) + (iSTFT無しでONNX単一グラフ・非対応op無し) + (ONNX-CPU RTF 0.093) で、
+CPU/モバイル/配布の全要件を満たす。Vocos除外・WaveNeXt本命の判断が実装・ONNX化まで一貫して実証された。
+
 ## 5. 期待値と限界
 
 - **期待**: ドメイン適合WaveNeXtで天井2.90→3.3〜3.7域、最終TTS UTMOSは予測mel品質に律速されつつ +0.1〜0.4程度。ONNX-CPU RTF ~0.087（HiFi-GAN同等）
