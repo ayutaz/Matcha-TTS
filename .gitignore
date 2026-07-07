@@ -163,3 +163,6 @@ gradio_cached_examples/
 synth_output/
 /data
 .gradio/
+eval/vocoder_ab_smoke/
+eval/vocoder_ab/wavenext/
+eval/vocoder_ab/hifigan_univ_v1/

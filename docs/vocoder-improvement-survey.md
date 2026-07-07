@@ -173,6 +173,24 @@ Vocos/BigVGANは「PyTorch上の品質天井の参照」としてのみA/Bに含
 
 ---
 
+## 4-bis. Phase A 実測結果（2026-07-07、ローカルCPU）
+
+`scripts/eval_vocoder_ab.py` で jvs_aligned 予測mel（5話者×10文=50サンプル, n_timesteps=32）を
+WaveNeXtゼロショット vs 現行HiFi-GAN で paired UTMOS 比較:
+
+| ボコーダ | UTMOS | 破綻(<1.5) |
+|------|:---:|:---:|
+| WaveNeXt（BSC-LT/wavenext-mel, ゼロショット） | **2.925 ± 0.349** | 0 |
+| HiFi-GAN univ（現行baseline） | 2.983 ± 0.413 | 0 |
+| paired delta (WaveNeXt − HiFi-GAN) | **−0.058（SE 0.047, t=−1.24, 有意差なし, win率44%）** | — |
+
+**結論**:
+1. **mel互換性は実証** — 破綻サンプル0。config一致（Slaney/Slaney/log(clamp)）が実音声で裏付けられた（非互換ならUTMOS~1の破綻音になる）
+2. **ゼロショットは品質同等**（統計的に区別不能）。両者ともJVS未適合のため予想通り。音質の上積みは無し
+3. HiFi-GAN 2.983 は出荷モデル評価の3.00（1000サンプル）と一致 → harness検証OK
+4. **判定**: ゼロショットではHiFi-GANを上回らない（同等）→ 明確な品質向上には **Phase B（WaveNeXt JVS fine-tune）** が必要。
+   ただしWaveNeXtは品質同等かつONNX/モバイル対応（iSTFT無し）なので、デプロイ目標には既に十分（parity + 展開性）
+
 ## 5. 期待値と限界
 
 - **期待**: ドメイン適合WaveNeXtで天井2.90→3.3〜3.7域、最終TTS UTMOSは予測mel品質に律速されつつ +0.1〜0.4程度。ONNX-CPU RTF ~0.087（HiFi-GAN同等）
