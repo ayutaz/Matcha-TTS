@@ -28,6 +28,28 @@ def load_config(path):
     return OmegaConf.to_container(OmegaConf.load(path), resolve=True)
 
 
+def build_logger(logger_cfg, save_dir):
+    """Build a Lightning logger. logger_cfg: {type: wandb|tensorboard|none, project/name/tags/offline}."""
+    from lightning.pytorch.loggers import TensorBoardLogger
+
+    if not logger_cfg or logger_cfg.get("type", "tensorboard") in (None, "none"):
+        return TensorBoardLogger(save_dir=save_dir, name="wavenext")
+    kind = logger_cfg.get("type", "tensorboard")
+    if kind == "tensorboard":
+        return TensorBoardLogger(save_dir=save_dir, name=logger_cfg.get("name", "wavenext"))
+    if kind == "wandb":
+        from lightning.pytorch.loggers import WandbLogger
+
+        return WandbLogger(
+            project=logger_cfg.get("project", "matcha-tts-ja"),
+            name=logger_cfg.get("name"),
+            save_dir=save_dir,
+            tags=logger_cfg.get("tags"),
+            offline=logger_cfg.get("offline", False),
+        )
+    raise ValueError(f"unknown logger type: {kind}")
+
+
 def build_model(model_cfg):
     feature_extractor = MatchaMelFeatures(**model_cfg["feature_extractor"])
     backbone = VocosBackbone(**model_cfg["backbone"])
@@ -74,7 +96,9 @@ def main(argv=None):
     tr = dict(cfg.get("trainer", {}))
     # manual optimization clips inside the module; never pass gradient_clip_val to the Trainer.
     tr.pop("gradient_clip_val", None)
-    trainer = L.Trainer(**tr)
+    save_dir = tr.pop("default_root_dir", "logs/wavenext")
+    logger = build_logger(cfg.get("logger"), save_dir)
+    trainer = L.Trainer(logger=logger, default_root_dir=save_dir, **tr)
     trainer.fit(model, dm, ckpt_path=args.ckpt_path)
 
 

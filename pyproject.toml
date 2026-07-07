@@ -48,6 +48,7 @@ dependencies = [
     "rootutils",
     "rich",
     "tensorboard",
+    "wandb",
     "numpy",
     "gdown",
     "wget",

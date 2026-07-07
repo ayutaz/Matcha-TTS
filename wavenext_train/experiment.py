@@ -161,6 +161,11 @@ class WaveNeXtExp(L.LightningModule):
         out["loss_g"] = loss_g.detach()
         out["mel_loss"] = mel_loss.detach()
 
+        metrics = {"train/loss_g": out["loss_g"], "train/mel_loss": out["mel_loss"]}
+        if out["loss_d"] is not None:
+            metrics["train/loss_d"] = out["loss_d"]
+        self.log_dict(metrics, on_step=True, on_epoch=False, prog_bar=True, batch_size=audio.shape[0])
+
         sch_d.step()
         sch_g.step()  # D11-2: one scheduler step per batch
         if self.use_ema:

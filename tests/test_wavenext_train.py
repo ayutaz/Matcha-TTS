@@ -115,6 +115,17 @@ def test_fit_two_batches_manual_opt_cpu(tmp_path):
     assert int(model.n_batches.item()) >= 1
 
 
+def test_build_logger_returns_requested_type(tmp_path):
+    from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+
+    from wavenext_train.train import build_logger
+
+    assert isinstance(build_logger(None, str(tmp_path)), TensorBoardLogger)
+    assert isinstance(build_logger({"type": "tensorboard"}, str(tmp_path)), TensorBoardLogger)
+    wl = build_logger({"type": "wandb", "project": "matcha-tts-ja", "name": "t", "offline": True}, str(tmp_path))
+    assert isinstance(wl, WandbLogger)
+
+
 def test_existing_wavenext_suite_untouched():
     voc = WaveNeXtVocoder()
     n = sum(p.numel() for p in voc.parameters())
