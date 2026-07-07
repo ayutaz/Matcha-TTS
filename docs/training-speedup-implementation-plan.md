@@ -10,9 +10,9 @@
 | 項目 | 判定 | 状況 | デフォルト |
 |------|:---:|------|:---:|
 | **bf16-mixed 恒久化** | 採用 | ✅ 実装・適用済み（config default化） | **ON**（実証済み） |
-| **A-1 プロファイリング** | 採用 | ✅ 実装済み（インスタンスで実行待ち） | 明示選択時のみ |
+| **A-1 プロファイリング** | 採用 | ✅ 実装・**実行済み**（2026-07-07、結果は下記） | 明示選択時のみ |
 | **C-1 NCCL / C-2 電力** | 採用 | ✅ 実装済み（インスタンスで適用待ち） | opt-in |
-| **A-2 Regional compile** | 条件付き採用 | ✅ scaffolding実装済み（3段ゲート後に採否） | **OFF** |
+| **A-2 Regional compile** | **見送り確定** | ✅ scaffolding実装済み（**A-1でtransformerは律速でないと実測 → 本採用せず**） | **OFF** |
 | **A-3 cuDNN SDPA** | 見送り | ❌ 未実装（ROIゼロ・品質リスク） | — |
 | **B-1 frame batching** | 後回し | ⏸️ 未実装（A-1で充填律速確認時のみ） | — |
 
@@ -62,6 +62,39 @@
 - **期待効果は控えめ**: decoderのcompute_lossは1step1回・256ch launch-bound・SnakeBetaが
   `@torch.compiler.disable` でeager → end-to-end **1.0–1.10x（ノイズ内なら不採用）**
 
+## A-1 実測結果（2026-07-07、単GPU RTX 5090、bf16-mixed、20 profiled steps）
+
+`bash scripts/profile_training.sh` を出荷モデル同構成で実行した実測。
+
+### 律速判定: カーネル起動/dispatch律速で確定（GPU idle ~83%）
+| 指標 | 値 |
+|------|------|
+| GPU実カーネル時間（Self CUDA total） | **66ms/step**（1.321s / 20step） |
+| wall-clock | ~390ms/step（2.56 it/s） |
+| **GPU稼働率** | **~17%（=83%アイドル）** |
+| 1stepあたりカーネル起動数 | copy_ 1339 / layout変換 1265 / mul 821 / add_ 846 / conv_bwd 68 = **数千個/step** |
+
+Self CPU 17.0s ≫ Self CUDA 1.32s + 数千個/stepの微小カーネル = 典型的なカーネル起動律速。
+
+### GPU計算の内訳（self CUDA time）
+| 演算 | 占有 | 呼び出し | 経路 |
+|------|:---:|:---:|------|
+| `convolution_backward` | **39.1%** | 1,360 | decoder ResNet/sampling conv |
+| `cudnn_convolution` | 14.3% | 1,340 | 同上 |
+| `copy_` | 12.6% | 26,784 | 内部コピー |
+| layout変換 nchwToNhwc/nhwcToNchw | 12.0% | 38,458 | Conv1d + cudnn NHWC algo |
+| elementwise (mul等) | ~15% | 数万 | mask乗算/GroupNorm等 |
+| **GEMM (mm/xmma) ← A-2の対象** | **~2%** | — | transformer attention/FFN |
+
+### 結論（A-2見送りの根拠）
+- decoderの**conv経路が~65%**を占め、**A-2が対象とするtransformerブロックのGEMMは~2%と極小**
+- → A-2（transformerのみcompile）は律速に当たっておらず、効果はほぼ確実にノイズ内。3段ゲート検証に進む価値なし。**A-1が本来の役割（無駄投資回避）を果たした**
+- 本当に効かせるにはdecoder forward全体のcompile（DDP下フルcompile=pytorch#140229の高リスク領域）・layout変換38k回削減（可変長Conv1dで難）・fused AdamW（crash制約）が必要で、いずれも品質を賭けない方針では割に合わない
+- **bf16の+11%が事実上の到達点**。これ以上は現状受容（24h/$45）が合理的
+- scaffolding（`compile_regional_blocks` フラグ）はデフォルトOFFで無害なため保持（将来decoder全体compileを試す土台）
+
+chrome trace: instance上 `logs/train/jvs_aligned/runs/2026-07-07_05-50-35/profiler/trace_rank0.json`
+
 ## インスタンス起動後の手順（stopped → start で$1.76/hr課金再開）
 
 1. **A-1 profiling**: `bash scripts/profile_training.sh`（単GPU）→ 律速を確定 ★投資判断の分岐点
@@ -82,9 +115,9 @@
 
 現状ベースライン: **bf16 ~2.8 steps/s → 2500ep ≈ 24h / ~$45**。
 
-- **確実にやる（低コスト・ゼロ品質リスク）**: A-1 + C-1 + C-2。合計~40分・$1–2で安定化と投資先確定
-- **A-1次第でやる**: A-2（カーネル起動律速が出たら）。ただし効果がノイズ内なら潔く捨てる。
-  単発runの節約$10未満、複数run回すなら割に合う
+- **実施済み**: bf16（採用）+ A-1（実行し律速確定、~$0.6）+ C-1/C-2（実装、適用は次回起動時）
+- **A-2は見送り確定**: A-1実測でtransformer（A-2の対象）は律速でないと判明（GEMM~2%）。
+  カーネル起動律速の本体はconv経路 + 微小kernelで、A-2のスコープ外。3段ゲートに進まない
 - **原則やらない**: A-3（ROIゼロ）。B-1は「充填律速の実証 + 複数run予定」の二条件が揃うまで着手しない
 - **最も合理的な既定**: 現行bf16構成（24h/$45）で何もしないのも正当。opt-in scaffoldingはlandしておき
   （default経路はbyte-identical）、次にインスタンスを起動する用事のついでにA-1で律速を確認する低コミット運用
