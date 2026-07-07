@@ -1,0 +1,59 @@
+# @package _global_
+
+# Tsukuyomi-chan single-speaker fine-tune of the MoeSpeech base (MAS, fmax=11025).
+# Execute:
+#   python matcha/train.py experiment=tsukuyomi_finetune test=false \
+#     ckpt_path=/abs/path/checkpoints/tsukuyomi_init.ckpt
+# where tsukuyomi_init.ckpt is produced by scripts/transfer_speaker_embedding.py
+# (weights-only, n_spks=474). Single speaker => MAS does not degenerate (paper's setting).
+
+defaults:
+  - override /data: tsukuyomi_precomputed.yaml
+  - override /trainer: gpu.yaml     # single GPU (DDP drop_last would discard all batches at this size)
+  - override /callbacks: default.yaml
+
+tags: ["tsukuyomi", "japanese", "single-speaker", "finetune", "mas", "fmax11025"]
+
+run_name: tsukuyomi_finetune
+
+model:
+  n_vocab: 55
+  optimizer:
+    fused: false
+    lr: 1e-4          # drop to 5e-5 / 2e-5 if overfitting / forgetting appears
+
+compile_model: false
+compile_regional_blocks: false
+gradient_checkpointing: false
+
+callbacks:
+  model_checkpoint:
+    monitor: "loss/val"
+    mode: "min"
+    save_top_k: 3
+    save_last: true
+    save_on_train_epoch_end: false    # best judged at validation end (robust to epoch cadence)
+    auto_insert_metric_name: false
+    filename: "ft_{epoch:03d}"
+    every_n_epochs: 25
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "loss/val"
+    patience: 8
+    min_delta: 0.0
+    mode: "min"
+    check_finite: true
+    verbose: true
+  ema:
+    _target_: lightning.pytorch.callbacks.EMAWeightAveraging
+    decay: 0.9995
+    update_every_n_steps: 1
+    update_starting_at_epoch: 0        # fine-tune has few total steps -> accumulate early
+
+trainer:
+  # steps/epoch = floor(train_utt / batch_size), e.g. floor(81/16)=5.
+  # max_epochs = target_steps / steps_per_epoch, e.g. 7500/5 = 1500.
+  max_epochs: 1500
+  check_val_every_n_epoch: 25
+  gradient_clip_val: 1.0             # proven recipe (trainer/default.yaml uses 5.0)
+  precision: bf16-mixed

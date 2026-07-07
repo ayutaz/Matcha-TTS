@@ -1,0 +1,49 @@
+# @package _global_
+
+# MoeSpeech multi-speaker base pre-training (MAS, fmax=11025).
+# Character-voice base model, later transferred to a Tsukuyomi single-speaker fine-tune.
+# Execute (subset smoke): python matcha/train.py experiment=moespeech_pretrain test=false
+# For the full run, override data.train_pt_dir/val_pt_dir, data.data_statistics and
+# trainer.max_epochs (derive from a step budget — see docs/moe-tsukuyomi-pipeline-plan.md §4).
+
+defaults:
+  - override /data: moespeech_precomputed.yaml
+  - override /trainer: ddp_optimized.yaml
+  - override /callbacks: default.yaml
+
+tags: ["moespeech", "japanese", "multispeaker", "pretrain", "mas", "fmax11025"]
+
+run_name: moespeech_pretrain
+
+model:
+  n_vocab: 55
+  # bf16-mixed requires fused=false (fused AdamW + mixed + grad clipping crashes)
+  optimizer:
+    fused: false
+
+compile_model: false
+compile_regional_blocks: false
+gradient_checkpointing: false
+
+callbacks:
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "loss/val"
+    patience: 30
+    min_delta: 0.001
+    mode: "min"
+    check_finite: true
+    verbose: true
+  ema:
+    _target_: lightning.pytorch.callbacks.EMAWeightAveraging
+    decay: 0.9995
+    update_every_n_steps: 1
+    update_starting_at_epoch: 10
+
+trainer:
+  # Subset smoke value. Full run: derive from a step budget (150-300K steps),
+  # max_epochs = target_steps * effective_batch / N_utt (do NOT copy JVS's 2500).
+  max_epochs: 200
+  check_val_every_n_epoch: 10
+  # bf16-mixed: RTX 5090 実証済み。T4/V100 は CLI で trainer.precision=32-true
+  precision: bf16-mixed

@@ -66,6 +66,20 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    # Guard against training with placeholder mel statistics (mean=0.0/std=1.0). New
+    # precomputed pipelines (e.g. fmax=11025 moe/tsukuyomi) start with 0.0/1.0 placeholders
+    # that must be replaced by the real stats from the stats pass; z-score normalization with
+    # std=1.0/mean=0.0 is a no-op that silently degrades training.
+    stats = cfg.data.get("data_statistics") if hasattr(cfg.data, "get") else None
+    if stats is not None:
+        mean, std = stats.get("mel_mean"), stats.get("mel_std")
+        if mean == 0.0 and std == 1.0:
+            raise ValueError(
+                "data_statistics is the placeholder (mel_mean=0.0, mel_std=1.0). "
+                "Compute real stats (scripts/prepare_moespeech.py stats / matcha-data-stats) "
+                "and set them in the data config before training."
+            )
+
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")  # pylint: disable=protected-access
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
