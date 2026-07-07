@@ -191,6 +191,29 @@ WaveNeXtゼロショット vs 現行HiFi-GAN で paired UTMOS 比較:
 4. **判定**: ゼロショットではHiFi-GANを上回らない（同等）→ 明確な品質向上には **Phase B（WaveNeXt JVS fine-tune）** が必要。
    ただしWaveNeXtは品質同等かつONNX/モバイル対応（iSTFT無し）なので、デプロイ目標には既に十分（parity + 展開性）
 
+## 4-ter. BigVGAN診断プローブ（2026-07-07、濁りの原因切り分け）
+
+ユーザ試聴で「WaveNeXt/HiFi-GAN両方が同等に濁る」→ 濁りの原因（ボコーダ品質 vs fmax構造天井）を
+切り分けるため、`scripts/eval_bigvgan_probe.py` で同一予測mel（2話者×10文=20）を最強のBigVGAN v2
+（fmax8k・mel互換・anti-aliasing・112M）でも合成して比較:
+
+| ボコーダ | UTMOS | vs HiFi-GAN |
+|------|:---:|:---:|
+| BigVGAN v2 fmax8k（最強・参照のみ） | 3.019 ± 0.525 | +0.023（win 50%） |
+| WaveNeXt（ゼロショット） | 3.070 ± 0.423 | +0.074（win 70%） |
+| HiFi-GAN univ（現行） | 2.996 ± 0.488 | — |
+
+**結論（濁りはfmax構造天井、ボコーダでは直らない）**:
+- **3つとも~3.0で統計的に横並び**。高域強化に特化した最強のBigVGANですら現行HiFi-GANと同等（+0.023）
+- → 濁りの原因は**ボコーダの品質/アーキではなくfmax=8000の帯域制限**（melに8kHz以上の情報が無く、どのボコーダも同じ帯域制限音しか出せない）。前回「予測mel(3.00)≈GT mel天井(2.90)」＝アコースティックモデルは天井到達、とも整合
+- **Phase B（WaveNeXt fine-tune）は濁り改善には投資価値が低い**（最強BigVGANでも改善しない以上、fine-tuneでも減らない公算大）。この診断でGPU出費を回避
+- **濁りの本質的改善は fmax=8000→11025 引き上げ = アコースティックモデル再学習**（mel統計再計算・全前処理やり直し・2500ep再学習）が必要な破壊的変更のみ
+- 副産物: WaveNeXtは品質同等以上＋ONNX/モバイル最速 → **デプロイ用途にはWaveNeXtが最適**（Phase C）
+
+**注**: GT mel天井の直接測定（本物のJVS録音mel→各ボコーダ）はローカルにJVS wavが無く未実施。
+fmax引き上げの前に最終確認したい場合はインスタンス（JVS .pt保有）で実施可能。ただしBigVGANプローブ＋前回データで
+「fmax構造天井」の結論は十分堅い。
+
 ## 5. 期待値と限界
 
 - **期待**: ドメイン適合WaveNeXtで天井2.90→3.3〜3.7域、最終TTS UTMOSは予測mel品質に律速されつつ +0.1〜0.4程度。ONNX-CPU RTF ~0.087（HiFi-GAN同等）
