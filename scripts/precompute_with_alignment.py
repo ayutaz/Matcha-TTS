@@ -241,7 +241,9 @@ def run_legacy_pipeline(tasks: list[Task], args) -> tuple[int, int, list]:
     skip = 0
     errors: list[tuple[str, str]] = []
 
-    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=args.num_workers, initializer=_apply_fmax, initargs=(args.fmax,)
+    ) as executor:
         futures = {
             executor.submit(
                 process_sample_with_alignment,
@@ -368,6 +370,21 @@ def _load_one(task: Task, text_cache: dict[str, tuple[list[int], str]]) -> Loade
 
 _MEL_BASIS_CACHE: dict[str, torch.Tensor] = {}
 _HANN_CACHE: dict[str, torch.Tensor] = {}
+
+
+def _apply_fmax(fmax: int) -> None:
+    """Set the module-level mel fmax used by every mel path (CPU/GPU/fast) + basis cache.
+
+    Called in main() for the in-process fast/GPU path and passed as the
+    ProcessPoolExecutor initializer so spawned legacy workers pick up the same
+    fmax (they re-import the module with the default otherwise). Default fmax
+    (8000) keeps existing JVS output byte-identical.
+    """
+    global F_MAX
+    F_MAX = fmax
+    # basis cache is keyed by device, not fmax — clear so it repopulates at the new fmax
+    _MEL_BASIS_CACHE.clear()
+    _HANN_CACHE.clear()
 
 
 def _get_mel_basis_hann(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -634,6 +651,13 @@ def main():
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--mel-mean", type=float, default=-6.550095)
     parser.add_argument("--mel-std", type=float, default=2.383771)
+    parser.add_argument(
+        "--fmax",
+        type=int,
+        default=F_MAX,
+        help="Mel fmax in Hz. Default 8000 keeps existing JVS/Julius output byte-identical. "
+        "fmax=11025 pipeline (Julius fallback for moe/tsukuyomi): pass 11025.",
+    )
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument(
         "--align-mode",
@@ -681,8 +705,12 @@ def main():
     print(f"Lab directory: {lab_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Mel normalization: mean={args.mel_mean}, std={args.mel_std}")
+    print(f"Mel fmax: {args.fmax} Hz")
     print(f"Workers: {args.num_workers}, Align mode: {args.align_mode}")
     print(f"Mode: {'legacy' if args.legacy else 'fast'}")
+
+    # Set fmax for the in-process fast/GPU path (legacy workers get it via initializer below).
+    _apply_fmax(args.fmax)
 
     tasks = build_tasks(entries, lab_dir, output_dir)
     if args.bench_only and args.bench_only > 0:

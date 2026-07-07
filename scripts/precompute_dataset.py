@@ -72,6 +72,7 @@ def process_sample(
     mel_mean: float,
     mel_std: float,
     durations_dir=None,  # Path | None
+    fmax=F_MAX,  # mel fmax in Hz; default keeps existing byte-identical behaviour
 ):
     """Compute mel + text + optional duration for a single sample and save as .pt.
 
@@ -95,7 +96,7 @@ def process_sample(
         HOP_LENGTH,
         WIN_LENGTH,
         F_MIN,
-        F_MAX,
+        fmax,
         center=False,
     ).squeeze()
     mel = normalize(mel, mel_mean, mel_std)
@@ -177,6 +178,13 @@ def main():
         help="Directory containing .npy duration files from Julius forced alignment. "
         "Naming: {spk_name}_{utterance_id}.npy",
     )
+    parser.add_argument(
+        "--fmax",
+        type=int,
+        default=F_MAX,
+        help="Mel fmax in Hz. Default 8000 keeps existing JVS output byte-identical. "
+        "New moe/tsukuyomi pipeline (fmax=11025 pipeline): pass 11025 (Nyquist at 22050 Hz).",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -186,6 +194,7 @@ def main():
     print(f"Loaded {len(entries)} entries from {args.filelist}")
     print(f"Output directory: {output_dir}")
     print(f"Mel normalization: mean={args.mel_mean}, std={args.mel_std}")
+    print(f"Mel fmax: {args.fmax} Hz")
     print(f"Workers: {args.num_workers}")
 
     use_gpu = args.gpu and torch.cuda.is_available()
@@ -245,7 +254,7 @@ def main():
                     HOP_LENGTH,
                     WIN_LENGTH,
                     F_MIN,
-                    F_MAX,
+                    args.fmax,
                     center=False,
                 ).squeeze()
                 mel = mel.cpu()
@@ -283,6 +292,7 @@ def main():
                     args.mel_mean,
                     args.mel_std,
                     Path(args.durations_dir) if args.durations_dir else None,
+                    args.fmax,
                 )
                 futures[future] = wav_path
 
