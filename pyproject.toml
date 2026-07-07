@@ -120,7 +120,7 @@ exclude = [
     ".eggs", ".git", ".hg", ".mypy_cache", ".tox", ".venv",
     "_build", "buck-out", "build", "dist",
     # アンカー必須: "data" だと matcha/data/ もベースネーム一致で除外される
-    "/logs", "/data", "matcha/hifigan",
+    "/logs", "/data", "matcha/hifigan", "matcha/wavenext",
 ]
 
 [tool.ruff.lint]
@@ -185,6 +185,7 @@ testpaths = "tests/"
 source = ["matcha"]
 omit = [
     "matcha/hifigan/*",
+    "matcha/wavenext/*",
     "matcha/app.py",
     "matcha/train.py",
 ]

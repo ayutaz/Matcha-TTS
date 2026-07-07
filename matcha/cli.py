@@ -26,6 +26,9 @@ MATCHA_URLS = {
 VOCODER_URLS = {
     "hifigan_T2_v1": "https://github.com/shivammehta25/Matcha-TTS-checkpoints/releases/download/v1.0/generator_v1",  # Old url: https://drive.google.com/file/d/14NENd4equCBLyyCSke114Mv6YR_j_uFs/view?usp=drive_link
     "hifigan_univ_v1": "https://github.com/shivammehta25/Matcha-TTS-checkpoints/releases/download/v1.0/g_02500000",  # Old url: https://drive.google.com/file/d/1qpgI41wNXFcH-iKq1Y42JlBC9j0je8PW/view?usp=drive_link
+    # WaveNeXt (iSTFT-free ConvNeXt vocoder, Apache-2.0). Mel-compatible with Matcha
+    # (22050/80/1024/256/fmax8000, Slaney, log(clamp,1e-5)). ONNX/mobile friendly.
+    "wavenext": "https://huggingface.co/BSC-LT/wavenext-mel/resolve/main/pytorch_model.bin",
 }
 
 MULTISPEAKER_MODEL = {
@@ -96,11 +99,33 @@ def load_hifigan(checkpoint_path, device):
     return hifigan
 
 
+def load_wavenext(checkpoint_path, device):
+    from matcha.wavenext import WaveNeXtVocoder
+
+    wavenext = WaveNeXtVocoder().to(device)
+    try:
+        sd = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    except Exception:  # noqa: BLE001 - fall back for non-plain-tensor checkpoints (BSC weights are trusted)
+        sd = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(sd, dict) and "state_dict" in sd:  # guard if a full .ckpt is passed
+        sd = sd["state_dict"]
+    # The Matcha input mel is produced by matcha/utils/audio.py, so the vocoder's own
+    # torchaudio feature_extractor.* weights are not needed and are dropped.
+    sd = {k: v for k, v in sd.items() if not k.startswith("feature_extractor.")}
+    missing, unexpected = wavenext.load_state_dict(sd, strict=False)
+    assert not missing, f"WaveNeXt missing keys: {missing}"
+    assert not unexpected, f"WaveNeXt unexpected keys (after dropping feature_extractor.*): {unexpected}"
+    _ = wavenext.eval()
+    return wavenext
+
+
 def load_vocoder(vocoder_name, checkpoint_path, device):
     print(f"[!] Loading {vocoder_name}!")
     vocoder = None
     if vocoder_name in ("hifigan_T2_v1", "hifigan_univ_v1"):
         vocoder = load_hifigan(checkpoint_path, device)
+    elif vocoder_name == "wavenext":
+        vocoder = load_wavenext(checkpoint_path, device)
     else:
         raise NotImplementedError(
             f"Vocoder {vocoder_name} not implemented! define a load_<<vocoder_name>> method for it"
@@ -153,8 +178,8 @@ def validate_args(args):
             args = validate_args_for_multispeaker_model(args)
     else:
         # When using a custom model
-        if args.vocoder != "hifigan_univ_v1":
-            warn_ = "[-] Using custom model checkpoint! I would suggest passing --vocoder hifigan_univ_v1, unless the custom model is trained on LJ Speech."
+        if args.vocoder not in ("hifigan_univ_v1", "wavenext"):
+            warn_ = "[-] Using custom model checkpoint! I would suggest passing --vocoder hifigan_univ_v1 (or wavenext), unless the custom model is trained on LJ Speech."
             warnings.warn(warn_, UserWarning)
         if args.speaking_rate is None:
             args.speaking_rate = 1.0
