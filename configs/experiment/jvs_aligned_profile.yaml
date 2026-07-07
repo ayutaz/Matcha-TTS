@@ -1,0 +1,43 @@
+# @package _global_
+
+# A-1 profiling variant of jvs_aligned. Inherits the full proven recipe (bf16-mixed,
+# fused=false, Julius durations, DDP-optimized trainer) and only:
+#   * swaps EMA / early-stopping for the torch.profiler callback (rank 0 kernel trace)
+#   * bounds the run to 1 epoch / 35 train batches (no checkpoints kept)
+# Purpose: locate the training bottleneck (GEMM vs kernel-launch vs comm vs data) so the
+# A-2 / B-1 investment decisions are grounded. NOT for real training.
+#
+# To execute (single GPU):        python matcha/train.py experiment=jvs_aligned_profile
+# 4-GPU DDP profile:              python matcha/train.py experiment=jvs_aligned_profile trainer.devices=[0,1,2,3]
+# Or use: bash scripts/profile_training.sh
+
+defaults:
+  - jvs_aligned
+
+# Null-out the inline callbacks jvs_aligned adds (instantiate_callbacks skips entries
+# without _target_) and add the profiler. Group-level model_checkpoint/summary stay.
+callbacks:
+  ema: null
+  early_stopping: null
+  torch_profiler:
+    _target_: matcha.callbacks.torch_profiler_callback.TorchProfilerCallback
+    wait: 5
+    warmup: 5
+    active: 20
+    row_limit: 30
+    trace_dir: ${paths.output_dir}/profiler
+    record_shapes: true
+
+# Pin precision/optimizer explicitly so the profile is representative of the real run,
+# even if the inherited defaults ever change.
+trainer:
+  max_epochs: 1
+  limit_train_batches: 35 # must be >= wait+warmup+active (=30)
+  check_val_every_n_epoch: 1000
+  precision: bf16-mixed
+
+model:
+  optimizer:
+    fused: false
+
+test: false

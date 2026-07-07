@@ -18,10 +18,20 @@ run_name: jvs_aligned
 # use_precomputed_durationsはmatcha.yamlで${data.load_durations}から自動解決
 model:
   n_vocab: 55
+  # bf16-mixed学習時はfused AdamWを無効化する（fused + mixed precision + gradient_clip=1.0 は
+  # Lightningが "does not allow for gradient clipping" で即クラッシュ）。単GPU FP32経路は
+  # グローバルの adam.yaml (fused: true) をそのまま使う
+  optimizer:
+    fused: false
 
-# torch.compileはDDP + dynamic shapesで不安定なため無効化
+# フルモデルtorch.compileはDDP + dynamic shapesで不安定なため無効化（pytorch#140229）
 compile_model: false
 compile_mode: "default"
+# A-2: decoderのtransformerブロックのみ個別compile（Regional compile）。DDP安全・state_dictキー不変。
+# デフォルトfalse=実証済みレシピとbyte-identical。有効化はA-1プロファイリングで
+# 「カーネル起動律速」が確認され、3段品質ゲート（数値等価/DDP安定/throughput+品質）を
+# 通過した場合のみ。gradient_checkpointing=true とは併用不可（train.pyで自動スキップ）
+compile_regional_blocks: false
 # gradient_checkpointing=falseの場合、ddp_optimized.yamlのstatic_graph=trueが使用可能
 gradient_checkpointing: false
 
@@ -43,4 +53,8 @@ callbacks:
 trainer:
   max_epochs: 2500
   check_val_every_n_epoch: 10
-  precision: "32-true"
+  # bf16-mixed: RTX 5090 DDPで実証済み（出荷済み2500epモデルはbf16学習・全品質ゲート通過、
+  # 退化率0%/UTMOS 3.00、FP32比 +11% steps/sec）。FP16とは別物 — bf16は8bit指数部を持ち
+  # overflowしないため、CLAUDE.mdが記録するFP16のdiff_lossスパイク/NaN発散は該当しない。
+  # T4/V100等でFP16が不安定な環境ではCLIで trainer.precision=32-true に戻すこと
+  precision: bf16-mixed

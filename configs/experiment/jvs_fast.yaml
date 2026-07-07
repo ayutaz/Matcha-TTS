@@ -16,6 +16,9 @@ run_name: jvs_fast
 # 原論文準拠: スケジューラなし、lr=1e-4固定、weight_decay=0.0
 model:
   n_vocab: 55
+  # bf16-mixed学習時はfused AdamWを無効化（fused + mixed + gradient_clip はクラッシュ）
+  optimizer:
+    fused: false
 
 compile_model: true
 compile_mode: "default"
@@ -41,5 +44,7 @@ trainer:
   max_epochs: 2500  # 原論文500Kステップに匹敵する~240Kステップ（100話者で十分な学習量）
   # バリデーション頻度: early stoppingを有効に機能させる
   check_val_every_n_epoch: 10
-  # FP32精度: FP16はDuration Predictor品質劣化を招く（2026-04-06検証済み）
-  precision: "32-true"
+  # bf16-mixed: RTX 5090 DDPで実証済み（jvs_alignedと同構成、+11% steps/sec）。
+  # 注意: これはbf16であってFP16ではない。FP16はDuration Predictor品質劣化を招く（2026-04-06検証済み）が、
+  # bf16は8bit指数部でoverflowせず品質同等。T4/V100でFP16不安定な環境はCLIで 32-true に戻す
+  precision: bf16-mixed

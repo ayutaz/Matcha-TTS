@@ -41,9 +41,17 @@ class TestJvsFastConfig:
         """check_val_every_n_epoch should be 10 for effective early stopping."""
         assert jvs_fast_config["trainer"]["check_val_every_n_epoch"] == 10
 
-    def test_precision_fp32(self, jvs_fast_config):
-        """precision should be 32-true (FP16 degrades Duration Predictor quality)."""
-        assert jvs_fast_config["trainer"]["precision"] == "32-true"
+    def test_precision_bf16_mixed(self, jvs_fast_config):
+        """precision should be bf16-mixed (RTX 5090 validated; +11% steps/sec, quality equal).
+
+        Note: bf16 != FP16. FP16 degrades the Duration Predictor, but bf16 has an 8-bit
+        exponent so it does not overflow and matches FP32 quality (see docs/eval report).
+        """
+        assert jvs_fast_config["trainer"]["precision"] == "bf16-mixed"
+
+    def test_optimizer_fused_disabled_for_mixed(self, jvs_fast_config):
+        """bf16-mixed requires fused=false (fused AdamW + mixed + grad clipping crashes)."""
+        assert jvs_fast_config["model"]["optimizer"]["fused"] is False
 
     def test_no_scheduler(self, jvs_fast_config):
         """No LR scheduler should be configured (paper-faithful: constant lr=1e-4)."""
@@ -85,9 +93,17 @@ class TestJvsAlignedConfig:
         """max_epochs should be 2500."""
         assert jvs_aligned_config["trainer"]["max_epochs"] == 2500
 
-    def test_precision_fp32(self, jvs_aligned_config):
-        """precision should be 32-true."""
-        assert jvs_aligned_config["trainer"]["precision"] == "32-true"
+    def test_precision_bf16_mixed(self, jvs_aligned_config):
+        """precision should be bf16-mixed (shipped 2500ep model trained this way, passed all gates)."""
+        assert jvs_aligned_config["trainer"]["precision"] == "bf16-mixed"
+
+    def test_optimizer_fused_disabled_for_mixed(self, jvs_aligned_config):
+        """bf16-mixed requires fused=false (fused AdamW + mixed + grad clipping crashes)."""
+        assert jvs_aligned_config["model"]["optimizer"]["fused"] is False
+
+    def test_compile_regional_blocks_default_off(self, jvs_aligned_config):
+        """A-2 regional compile must default OFF so the proven recipe stays byte-identical."""
+        assert jvs_aligned_config["compile_regional_blocks"] is False
 
     def test_tags_include_aligned(self, jvs_aligned_config):
         """tags should include 'aligned'."""

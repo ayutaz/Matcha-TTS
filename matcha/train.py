@@ -72,9 +72,30 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating model <{cfg.model._target_}>")  # pylint: disable=protected-access
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
-    if cfg.get("compile_model", False):
-        # DDP + torch.compile causes NCCL watchdog hangs during initial compilation
-        # (GIL contention in CUDA APIs across ranks). Only compile for single-GPU training.
+    # A-2: Regional torch.compile of the decoder's repeated transformer blocks.
+    # Unlike full-model compile, this is DDP-safe (compiled region stays inside the
+    # dynamic-shape guard scope and outside the DDP wrapper -> no pytorch#140229 blowup)
+    # and uses nn.Module.compile() in-place so state_dict keys are unchanged.
+    # Applied BEFORE trainer.fit() so it happens before the DDP wrap. Opt-in and
+    # default-OFF: with compile_regional_blocks=false the model is byte-identical.
+    compile_regional = cfg.get("compile_regional_blocks", False)
+    if compile_regional and cfg.get("gradient_checkpointing", False):
+        # grad_checkpoint over a compiled block is unverified territory; refuse to mix.
+        log.warning(
+            "compile_regional_blocks=true is skipped because gradient_checkpointing=true "
+            "(checkpointing a compiled block is unverified). Disable one of them."
+        )
+        compile_regional = False
+
+    if compile_regional:
+        compile_mode = cfg.get("compile_mode", "default")
+        log.info("Regionally compiling decoder transformer blocks with torch.compile (mode=%s)...", compile_mode)
+        n_compiled = model.decoder.estimator.compile_regions(mode=compile_mode)
+        log.info("Regional compile applied to %d transformer blocks.", n_compiled)
+    elif cfg.get("compile_model", False):
+        # Legacy full-estimator compile. DDP + torch.compile causes NCCL watchdog hangs
+        # during initial compilation (GIL contention in CUDA APIs across ranks), so only
+        # compile for single-GPU training.
         num_devices = cfg.trainer.get("devices", 1)
         strategy = cfg.trainer.get("strategy", "auto")
         is_multi_gpu = (isinstance(num_devices, (list, tuple)) and len(num_devices) > 1) or (

@@ -206,7 +206,7 @@ Hydraの設定ファイルは `configs/` にあります。主な合成構造: `
 ## JVS日本語学習の重要な知見
 
 ### 学習設定（確認済みの安定構成）
-- **FP32精度**: T4/V100ではFP16が学習不安定を引き起こす（diff_lossスパイク、NaN発散）
+- **精度**: **RTX 5090 DDPでは bf16-mixed が実証済みデフォルト**（`jvs_aligned`/`jvs_fast` にconfig化。出荷済み2500epモデルはbf16学習で全品質ゲート通過＝退化率0%/UTMOS 3.00、FP32比+11% steps/sec）。bf16はFP16と別物 — 8bit指数部を持ちoverflowしないため、下記FP16のdiff_lossスパイク/NaN発散は該当しない。**T4/V100等でFP16が不安定な環境ではCLIで `trainer.precision=32-true` に戻す**。bf16-mixed時は `model.optimizer.fused=false` 必須（fused AdamW + mixed + gradient clipping はクラッシュ）
 - **out_size=null**: 全長メル学習が必須。`out_size=172`はDecoder/Duration Predictorの品質不足を招く
 - **原論文準拠のLoss**: prior重み1.0、LOG_2PI復元、MSE duration loss。変更すると品質劣化
 - **原論文準拠のLR**: `lr=1e-4`、scheduler=なし、`weight_decay=0.0`。高LRは不安定
@@ -457,13 +457,20 @@ ProcessPoolExecutor版からsingle-process版への書き直しで **25.2分 →
 - **効果**: バグ修正後は12,997件全てが0エラーで完了（修正前は422件欠落）
 
 ### 学習最適化
-- **Fused AdamW**: `fused=True`でオプティマイザステップ高速化（ただしFP16+gradient clippingとは非互換）
-- **FP32精度**: V100/T4ではFP16が学習不安定のため、FP32をデフォルト使用
+- **Fused AdamW**: `fused=True`でオプティマイザステップ高速化（ただしmixed precision[bf16/FP16]+gradient clippingとは非互換 → bf16学習時は `model.optimizer.fused=false`）
+- **bf16-mixed精度**: RTX 5090 DDPで実証済みデフォルト（`jvs_aligned`/`jvs_fast`、FP32比+11% steps/sec、品質同等）。FP16はDuration Predictor品質劣化のため不可。T4/V100でbf16非対応/FP16不安定な環境はCLIで `trainer.precision=32-true` に戻す
 - **Gradient Checkpointing**: デコーダのTransformerブロックのみ（ResNetブロックは除外して計算効率化）
 - **DDP最適化**: `gradient_as_bucket_view=true`、`bucket_cap_mb=25`（通信overlap有効化）、`broadcast_buffers=false`、NCCLタイムアウト7200秒
 - **ログ最適化**: `sync_dist=False`（ステップレベル）、`log_dict()`統合でDDPオーバーヘッド削減
 - **データ読込**: os.scandir（NFS 12倍高速）、ファイルサイズキャッシュ、drop_last=True、preload_to_memoryオプション
 - **チェックポイント**: `save_on_train_epoch_end=true`で確実に保存（validation非依存）
+
+#### 高速化オプトインscaffolding（2026-07、全てデフォルトOFF・byte-identical）
+実装状況・採否根拠は `docs/training-speedup-implementation-plan.md`、調査は `docs/training-speed-optimization-survey.md`。**速度のために実証済み品質を賭ける変更は無し**。
+- **A-1 プロファイリング（律速確定=他投資の前提）**: `bash scripts/profile_training.sh`（または `experiment=jvs_aligned_profile`）。`matcha/callbacks/torch_profiler_callback.py` がrank0限定でカーネル内訳+chrome traceを出力。GEMM律速/カーネル起動律速/通信律速/データ律速を判定
+- **A-2 Regional torch.compile（`compile_regional_blocks=true` で有効化、既定false）**: `Decoder.compile_regions()` がdecoderのtransformerブロックを **`nn.Module.compile()`（in-place）で個別compile → state_dictキー不変**（ckpt/EMA/resume が壊れない）。trainer.fit前=DDPラップ前に適用しpytorch#140229を回避。`gradient_checkpointing=true` とは併用不可（自動スキップ）。期待1.0–1.10x。A-1で「カーネル起動律速」確認＋3段品質ゲート通過時のみ本採用
+- **C-1/C-2 ランタイム**: 本番launcher `scripts/train_jvs_aligned.sh`（`NCCL_P2P_DISABLE=1`/`NCCL_IB_DISABLE=1` — 5090はP2P物理不可で副作用ゼロ）。`setup_vastai.sh` に persistence mode（安全）+ 電力制限（`MATCHA_POWER_LIMIT` 明示時のみ、既定575W不変）
+- **見送り/後回し**: A-3 cuDNN SDPA（explicit maskでengageせず期待≈0・Blackwell silent-bugリスク → 見送り）、B-1 frame batching（A-1で充填律速が実証された場合のみ着手）
 
 ### 推論最適化
 - **torch.compile**: CUDA時にencoder/decoder/vocoder自動コンパイル（`reduce-overhead`モード）

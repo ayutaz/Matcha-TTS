@@ -2,6 +2,7 @@ import math
 from typing import Optional
 
 import torch
+import torch._dynamo
 import torch.nn as nn  # pylint: disable=consider-using-from-import
 import torch.nn.functional as F
 from conformer import ConformerBlock
@@ -223,6 +224,9 @@ class Decoder(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        # Regional torch.compile flag (A-2). Default False => forward() is byte-identical
+        # to the proven recipe. Enabled only via Decoder.compile_regions().
+        self._regional_compiled = False
 
         self.time_embeddings = SinusoidalPosEmb(in_channels)
         time_embed_dim = channels[0] * 4
@@ -369,6 +373,34 @@ class Decoder(nn.Module):
     def enable_gradient_checkpointing(self):
         self.use_gradient_checkpointing = True
 
+    def compile_regions(self, mode: str = "default"):
+        """Regionally compile the repeated transformer blocks in-place (A-2).
+
+        Uses ``nn.Module.compile()`` (NOT ``torch.compile(block)`` reassignment) so the
+        module identity — and therefore every ``state_dict`` key — is unchanged. This keeps
+        checkpoint save/load, EMA strict-load and ``resume`` working. Compiling per repeated
+        block (rather than the whole estimator) keeps the compiled region inside the
+        dynamic-shape guard scope and outside the DDP wrapper, avoiding the full-model
+        compile + DDP recompilation blowup (pytorch#140229).
+
+        Only ``mode="default"`` is intended: ``reduce-overhead`` (CUDA graphs) cannot capture
+        the variable mel time dimension.
+        """
+        # 6 transformer blocks total (down/mid/up), all dim=256 -> one shape signature reused.
+        # Raise the cache limit so per-block guards never evict each other.
+        torch._dynamo.config.cache_size_limit = max(
+            getattr(torch._dynamo.config, "cache_size_limit", 8), 64
+        )
+        n_compiled = 0
+        for block_group in (self.down_blocks, self.mid_blocks, self.up_blocks):
+            for stage in block_group:
+                transformer_blocks = stage[1]  # [resnet, transformer_blocks, (up/down)sample]
+                for block in transformer_blocks:
+                    block.compile(mode=mode, dynamic=False)
+                    n_compiled += 1
+        self._regional_compiled = True
+        return n_compiled
+
     def forward(self, x, mask, mu, t, spks=None, cond=None):
         """Forward pass of the UNet1DConditional model.
 
@@ -405,6 +437,9 @@ class Decoder(nn.Module):
             x = resnet(x, mask_down, t)
             x = x.transpose(1, 2)
             mask_down = mask_down.squeeze(1)
+            if self._regional_compiled:
+                torch._dynamo.mark_dynamic(x, 1)
+                torch._dynamo.mark_dynamic(mask_down, 1)
             for transformer_block in transformer_blocks:
                 if use_ckpt:
                     x = grad_checkpoint(
@@ -435,6 +470,9 @@ class Decoder(nn.Module):
             x = resnet(x, mask_mid, t)
             x = x.transpose(1, 2)
             mask_mid = mask_mid.squeeze(1)
+            if self._regional_compiled:
+                torch._dynamo.mark_dynamic(x, 1)
+                torch._dynamo.mark_dynamic(mask_mid, 1)
             for transformer_block in transformer_blocks:
                 if use_ckpt:
                     x = grad_checkpoint(
@@ -460,6 +498,9 @@ class Decoder(nn.Module):
             x = resnet(torch.cat([x, hiddens.pop()], dim=1), mask_up, t)
             x = x.transpose(1, 2)
             mask_up = mask_up.squeeze(1)
+            if self._regional_compiled:
+                torch._dynamo.mark_dynamic(x, 1)
+                torch._dynamo.mark_dynamic(mask_up, 1)
             for transformer_block in transformer_blocks:
                 if use_ckpt:
                     x = grad_checkpoint(
