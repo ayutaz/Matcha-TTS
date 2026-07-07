@@ -7,18 +7,48 @@
 本レポートは4エージェント並列調査（コードベース統合分析 / HiFi-GAN JVS fine-tune / BigVGAN / Vocos・最新系）の統合。
 **このドキュメントを確認してから実装に進む**（現時点では調査のみ・学習未着手）。
 
+## デプロイ制約（2026-07-07 ユーザ確定）
+
+以下の制約が候補選定を決定づける:
+- **CPU推論が必須**
+- **最終ターゲットはモバイル（モバイルCPU/GPU）**
+- **配布を視野に入れる**（ライセンス重要）
+- **最終的に必ずONNX化する。選定はONNX(特にCPU/モバイル)実行速度を一次基準とする**
+  — PyTorch速度ではなくONNX化後の速度が判断軸。速度で不利なら音質優位でも本命から外す
+
+### ★ONNX速度の結論（ユーザ仮説を一次情報で確認）
+**ユーザ仮説「VocosはONNXにすると遅くなる」は成立**。iSTFT/STFTは **ONNXにiSTFT opが存在しない**（opset17でSTFTは追加されたが逆変換iSTFTは未実装、[ONNX #4777](https://github.com/onnx/onnx/issues/4777)）。VocosのiSTFTヘッドは(a) ONNX外で別実装（単一グラフ配布を放棄、[wetdog方式](https://huggingface.co/wetdog/vocos-mel-24khz-onnx)）か(b) convサブグラフ化（[mush42/istft-onnx](https://github.com/mush42/istft-onnx)、**torch比≥4倍遅**）が必要。
+**WaveNeXtはiSTFTを線形層に置換 → Conv/GEMM/LayerNorm/Reshapeの標準opのみ** → ORT CPU・ONNX Runtime Mobile・TFLite・CoreML・ExecuTorchすべてでネイティブ最適化。
+ConvNeXt backboneは両者共通で問題なし。差は**出力ヘッド(iSTFT vs linear)に局在**。
+
+**決定的証拠**: BSC（バルセロナ）が同じMatcha-TTSのONNX多話者配布で **「Vocosと違い完全にONNX書き出しできるためWaveNeXtを選んだ」と明記**（[Interspeech 2024, Peiró-Lilja et al. §2.2](https://www.isca-archive.org/interspeech_2024/peirolilja24_interspeech.pdf)）。同論文のONNX-CPU実測（i7）: Matcha+WaveNeXt RTF **0.087** / Matcha+HiFi-GAN 0.089。**Vocosは表に載っていない（ONNX化できなかったため）**。
+
+### 制約による判定の変化（ONNX速度確定後）
+| 候補 | 判定 | 理由 |
+|------|:---:|------|
+| **WaveNeXt** (`BSC-LT/wavenext-mel`) | **デプロイ本命（確定）** | iSTFT無し=標準opのみ→ONNX/モバイル完全対応・HiFi-GAN同等以上に高速(RTF0.087)・軽量(13.68M)。日本語由来(NICT)・Apache-2.0・22kHz/80mel学習済み+ONNX export実績 |
+| **HiFi-GAN**（現行/fine-tune） | **無難な第2候補** | transposed convのみ=ONNX完全ネイティブ・既に`export.py`で"wav"直接出力済み・sherpa対応。WaveNeXtにわずかに劣る程度。再学習回避ならこれ |
+| **Vocos** (`BSC-LT/vocos-mel-22khz`) | **本命から除外** | PyTorchでは最速だがiSTFTがONNX/モバイルで遅い/非対応。同等品質ならiSTFT無しのWaveNeXtが合理的（BSC判断と一致） |
+| **BigVGAN** | **リファレンスのみ（配布・デプロイ不可）** | 112M・GPU前提・CPU 0.21×RT。モバイル不可。品質上限の天井測定用途に限定 |
+| **HiFi-GAN**（現行/fine-tune） | 現行baseline | transposed convでモバイル可だが音質が課題。fine-tuneは学習ループ未実装 |
+
+**追加の決定軸（モバイル）**: iSTFT/STFT opのONNX/TFLite/CoreML/ExecuTorch書き出し可否、int8量子化、
+sherpa-onnx等の既存モバイル推論経路。→ `## 6. モバイル/エッジ書き出し` に別途記載。
+
 ---
 
 ## エグゼクティブサマリー
 
-1. **Matchaのmel仕様にビット単位で一致する高品質ボコーダの公開checkpointが4つ存在**し、
-   いずれも**再学習ゼロ（ゼロショット）で現行HiFi-GANと差し替え比較できる**。これが最大の発見。
-2. **推奨は段階戦略**: まず①ゼロショットでVocos/WaveNeXt/BigVGANを差し替えA/B比較（コスト≈$0、数時間）→
-   ②不足ならJVS fine-tune。いきなりfine-tuneは非効率。
-3. HiFi-GAN JVS fine-tuneは実装コスト（学習ループ未実装）と「UTMOS逆転現象」リスクがあり、
-   **ゼロショット差し替えより優先度は低い**。
+1. **デプロイ制約（CPU必須・モバイル最終ターゲット・配布・ONNX化必須）を最優先すると、推奨はWaveNeXtで確定**。
+   VocosはPyTorch最速だが**iSTFTがONNXに無く**、ONNX/モバイルで遅い/単一グラフ化不可 → 本命から除外。
+   BSCが同じMatcha-TTSのONNX配布でVocosを捨てWaveNeXtを選んだ実例が決定的証拠（Interspeech 2024）。
+2. **推奨は段階戦略**: ①WaveNeXt(`BSC-LT/wavenext-mel`)をゼロショットで現行HiFi-GANとA/B比較（コスト≈$0）→
+   ②不足ならJVS fine-tune → ③既存 `matcha/onnx/export.py` の`MatchaWithVocoder`機構でWaveNeXt埋め込みONNX化。
+3. **HiFi-GANは無難な第2候補**（ONNX完全ネイティブ・既に統合済み・再学習不要）。WaveNeXtにわずかに劣る程度。
 4. **音質天井2.90の主因は「英語学習の汎用HiFi-GANがJVS未知」というドメイン差**であり、
-   ドメイン適合ボコーダ（fine-tune or 別checkpoint）で3.3〜3.7域まで上がる余地がある。
+   ドメイン適合ボコーダ（fine-tune）で3.3〜3.7域まで上がる余地がある。
+5. **sherpa-onnxはupstream(shivammehta25)非対応**のため本プロジェクトのモデルをそのまま載せられない。
+   自前ONNX（既存export機構）でモバイルORTに載せるのが第一経路。
 
 ---
 
@@ -107,35 +137,80 @@ kan-bayashi JVS/JSUT HiFi-GAN(24k/hop300/fmax7600) — いずれもmel不一致�
 
 ---
 
-## 4. 推奨戦略（段階的・低リスク順）
+## 4. 推奨戦略（ONNX速度最優先・段階的）
+
+**本命 = WaveNeXt**（ONNX/モバイル速度・配布で確定）。**第2候補 = 現行HiFi-GAN継続**（再学習不要のフォールバック）。
+Vocos/BigVGANは「PyTorch上の品質天井の参照」としてのみA/Bに含める（デプロイ候補ではない）。
 
 ### Phase A: ゼロショット差し替えA/B比較（最優先、コスト≈$0、~半日）
-mel完全一致の3系統を現行HiFi-GANと差し替えて比較。**学習不要**。
 1. **melフィルタ数値照合**（唯一の技術リスク）: 同一wavで「Matcha `mel_spectrogram()`」と各ボコーダのmel特徴量を照合し、
    Slaney正規化・power=1・reflect+center=Falseが一致することを確認（ここが合えばゼロショット動作）
 2. **GT mel再合成での天井測定**: 各ボコーダにGT melを通しUTMOS測定（現行HiFi-GAN天井2.90との比較）
 3. **予測mel合成でのA/B**: `jvs_aligned` の予測mel → 各ボコーダ → UTMOS + 試聴
-4. 候補: `BSC-LT/vocos-mel-22khz`（本命）/ `BSC-LT/wavenext-mel`（音質） / `nvidia/bigvgan_v2_22khz_80band_fmax8k_256x`（最高忠実度）
-5. `cli.py` の `VOCODER_URLS`/`load_vocoder` にボコーダ選択肢を追加（推論専用なので低リスク）
+4. 比較対象: **`BSC-LT/wavenext-mel`（本命）** / 現行`hifigan_univ_v1`（baseline） / 参照として`BSC-LT/vocos-mel-22khz`・`nvidia/bigvgan_v2_22khz_80band_fmax8k_256x`（品質天井の目安）
+5. `cli.py` の `VOCODER_URLS`/`load_vocoder` にWaveNeXt選択肢を追加（推論専用なので低リスク）
 
-### Phase B: JVS fine-tune（Phase Aで不足なら）
-- ゼロショットで最良だったボコーダをJVSでfine-tune。VocosはBSC checkpointから数時間の継続学習で話者性を詰められる
-- HiFi-GAN二段fine-tuneを選ぶ場合は学習ループ実装が前提。4GPUは「GT-mel/generated-mel/LR違い/BigVGAN比較」の並列スイープに使うのが費用対効果高い
+**判定基準**: WaveNeXtゼロショットが現行HiFi-GANを品質で上回れば → Phase Cへ（ONNX化して確定）。
+不足なら → Phase B（JVS fine-tune）。VocosがWaveNeXtより明確に良くても**ONNX速度で不利なため採らない**。
 
-### 判断ポイント（実装前に決めたいこと）
-- **CPU推論を残すか**: 残すならVocos/WaveNeXt（BigVGANはGPU前提）
-- **ライセンス**: 配布予定ならApache-2.0(Vocos/WaveNeXt) / MIT(BigVGAN)いずれも問題なし
-- **ゼロショットで十分か、fine-tuneまで行くか**: Phase Aの結果を見て決定
+### Phase B: WaveNeXt JVS fine-tune（Phase Aで不足なら）
+- `BSC-LT/wavenext-mel`（Catalan/多言語学習）から**JVS mel（22050/80/hop256/fmax8000）で継続fine-tune**し話者性を詰める
+- [wetdog/wavenext_pytorch](https://github.com/wetdog/wavenext_pytorch)（22kHz/80mel設定可・ONNX export同梱）を学習基盤に。単一5090で数時間〜1日
+- exposure bias解消のためgenerated(teacher-forced) melも使える（jvs_alignedのJulius durationでODE decode → GT波形整合mel。追加コストほぼゼロ）
+- 4GPUは「GT-mel / generated-mel / LR違い」の並列スイープに使うのが費用対効果高い（GAN vocoderのDDPは収穫逓減）
+
+### Phase C: ONNX化・配布（本命WaveNeXt確定後）
+- 既存 `matcha/onnx/export.py` の **`MatchaWithVocoder`**（vocoder埋め込み・出力名`"wav"`で単一グラフ化）を **WaveNeXt対応に拡張**
+- `matcha/cli.py` の `load_vocoder`（現状HiFi-GANのみ）にWaveNeXtローダを追加
+- WaveNeXtはiSTFT無し=標準opのみなので、既存のend-to-end ONNX書き出し・`matcha/onnx/infer.py`（`"wav"`判定）がそのまま流用可能
+- ONNX-CPU RTF計測でHiFi-GAN(0.089)と比較。int8はサイズ削減用途（速度/品質はA/B、conv int8はORTで遅化例あり要注意）
+- sherpa-onnx配布を狙うなら別途icefall形式ONNXへの準拠が必要（upstream非対応のため）→ 後追い
+
+### 判断ポイント（確定済み）
+- ~~CPU推論を残すか~~ → **必須確定**。iSTFT無しのWaveNeXt/HiFi-GANのみが候補（Vocos/BigVGAN除外）
+- **ライセンス**: WaveNeXt=Apache-2.0、HiFi-GAN=MIT系。配布問題なし
+- ゼロショットで十分か → Phase Aの結果で決定
 
 ---
 
 ## 5. 期待値と限界
 
-- **期待**: ドメイン適合ボコーダで天井2.90→3.3〜3.7域、最終TTS UTMOSは予測mel品質に律速されつつ +0.1〜0.4程度
+- **期待**: ドメイン適合WaveNeXtで天井2.90→3.3〜3.7域、最終TTS UTMOSは予測mel品質に律速されつつ +0.1〜0.4程度。ONNX-CPU RTF ~0.087（HiFi-GAN同等）
 - **限界1（fmax=8000の構造的天井）**: 条件付けmelが8kHzでband-limitのため、8-11kHzは推定生成しかできず摩擦音/歯擦音の鮮明さに天井。
   根本解消はfmax=11025化だがアコースティックモデル再学習（mel統計再計算）を伴う破壊的変更 → 今回非推奨
 - **限界2**: ボコーダはmel→波形のみ改善。ただし**jvs_alignedはMAS退化を既に解決済み（退化率0%）**なので、
   mel品質は良好でボコーダ差し替えがクリーンに効く条件は揃っている（BigVGAN調査の「退化melだと伸び限定」懸念は本モデルには非該当）
+
+---
+
+## 6. モバイル/エッジ・ONNX書き出し（デプロイ制約の核心）
+
+### iSTFTがONNXの鬼門（Vocos除外の根拠）
+- `torch.stft`/`torch.istft` は長年ONNXエクスポート非対応（[pytorch/audio #982](https://github.com/pytorch/audio/issues/982), [pytorch #65666](https://github.com/pytorch/pytorch/issues/65666)）
+- ONNXはopset17で**STFT opを追加したが逆変換iSTFT opは今も無い**（[ONNX #4777](https://github.com/onnx/onnx/issues/4777)）
+- Vocos公式のONNX要望は未解決（[gemelo-ai/vocos #38](https://github.com/gemelo-ai/vocos/issues/38)）。公開ONNX実装[wetdog/vocos-onnx](https://huggingface.co/wetdog/vocos-mel-24khz-onnx)は**iSTFTをONNX外で実行**（単一グラフ配布を放棄）
+- iSTFTをconvサブグラフ化する[mush42/istft-onnx](https://github.com/mush42/istft-onnx)は**torch比≥4倍遅**
+- ONNX Runtime Mobileの削減ビルドはSTFT/DFT contrib opを含む保証がない。TFLite/CoreML/ExecuTorchもiSTFTネイティブ無し
+- **ConvNeXt backbone自体は標準op（Conv1d/LayerNorm/Linear）で問題なし**。低速化はiSTFTヘッドに局在 → WaveNeXtは線形ヘッドでこれを回避
+
+### ONNX-CPU実測（BSC Interspeech 2024, i7 12th Gen、同一Matcha音響モデル）
+| 構成 | サイズ | RTF (GPU) | RTF (CPU) |
+|------|:---:|:---:|:---:|
+| Matcha + HiFi-GAN | 123 MB | 0.013 | 0.089 |
+| Matcha + WaveNeXt | 122 MB | 0.010 | **0.087** |
+| Matcha + Vocos | — | — | **表に無し（ONNX化できず）** |
+
+WaveNeXtはHiFi-GANより僅かに高速・軽量。**BSCがVocosを表に載せていない事実がVocos除外の直接証拠**。
+
+### sherpa-onnx（配布ランタイム基盤）の位置づけ
+- Android/iOS/RPi/WASM/HarmonyOSのonnxruntimeビルドを持つ優秀な基盤。Matcha-TTS対応済み（英語ljspeech・中国語baker、ボコーダはvocos-22khz-univ.onnx 51MB or hifigan）
+- **重大な制約**: sherpa-onnxは **shivammehta25 upstream由来のMatchaを非対応**と明記（icefallレシピのI/Oシグネチャ準拠モデルのみ）。本プロジェクトはupstream由来 → そのままでは載らない
+- 日本語Matchaはsherpa公式に無し（[Issue #3028](https://github.com/k2-fsa/sherpa-onnx/issues/3028)未解決）
+- → **第一経路は自前ONNX**（既存`matcha/onnx/export.py`でモバイルORTに載せる）。sherpa配布はicefall形式準拠が必要で後追い
+
+### int8量子化
+- ONNX dynamic int8はCPUで最大~3倍・サイズ~1/4だが、**convが主のボコーダはORTでint8がむしろ遅化する例あり**（[onnxruntime #12854](https://github.com/microsoft/onnxruntime/issues/12854)）
+- 波形生成は量子化ノイズに敏感 → **int8はサイズ削減手段と位置づけ**、速度/品質はA/B確認。WaveNeXtの線形ヘッドはiSTFTより量子化が素直
 
 ---
 
@@ -144,4 +219,5 @@ mel完全一致の3系統を現行HiFi-GANと差し替えて比較。**学習不
 - WaveNeXt: [NICT ASRU2023 demo](https://ast-astrec.nict.go.jp/demo_samples/asru_2023_okamoto/), [BSC-LT/wavenext-mel](https://huggingface.co/BSC-LT/wavenext-mel)
 - BigVGAN: [NVIDIA/BigVGAN](https://github.com/NVIDIA/BigVGAN), [arXiv 2206.04658](https://arxiv.org/pdf/2206.04658), [nvidia/bigvgan_v2_22khz_80band_fmax8k_256x](https://huggingface.co/nvidia/bigvgan_v2_22khz_80band_fmax8k_256x)
 - HiFi-GAN fine-tune: [jik876/hifi-gan](https://github.com/jik876/hifi-gan), [arXiv 2010.05646](https://arxiv.org/pdf/2010.05646), [ESPnet2-TTS arXiv 2110.07840](https://arxiv.org/pdf/2110.07840), [kan-bayashi/ParallelWaveGAN JSUT hifigan.v1](https://github.com/kan-bayashi/ParallelWaveGAN/blob/master/egs/jsut/voc1/conf/hifigan.v1.yaml)
-- コードベース: `matcha/utils/audio.py`, `matcha/cli.py`, `matcha/models/matcha_tts.py`, `matcha/hifigan/`
+- ONNX/モバイル: [BSC Interspeech 2024（WaveNeXt採用理由・RTF表）](https://www.isca-archive.org/interspeech_2024/peirolilja24_interspeech.pdf), [WaveNeXt ASRU2023](https://ieeexplore.ieee.org/document/10389765/), [wetdog/wavenext_pytorch(ONNX export)](https://github.com/wetdog/wavenext_pytorch), [ONNX iSTFT未実装 #4777](https://github.com/onnx/onnx/issues/4777), [vocos ONNX要望 #38](https://github.com/gemelo-ai/vocos/issues/38), [mush42/istft-onnx(4倍遅)](https://github.com/mush42/istft-onnx), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+- コードベース: `matcha/utils/audio.py`, `matcha/cli.py`, `matcha/models/matcha_tts.py`, `matcha/hifigan/`, `matcha/onnx/export.py`（`MatchaWithVocoder`）, `matcha/onnx/infer.py`
