@@ -34,6 +34,7 @@ dependencies = [
     # audio / text
     "phonemizer",
     "librosa",
+    "soundfile",  # direct use in precompute / wavenext_train dataset (torchaudio.load unusable on torch>=2.10)
     "scipy",
     "inflect",
     "Unidecode",
@@ -123,7 +124,7 @@ exclude = [
     ".eggs", ".git", ".hg", ".mypy_cache", ".tox", ".venv",
     "_build", "buck-out", "build", "dist",
     # アンカー必須: "data" だと matcha/data/ もベースネーム一致で除外される
-    "/logs", "/data", "matcha/hifigan", "matcha/wavenext",
+    "/logs", "/data", "matcha/hifigan", "matcha/wavenext", "wavenext_train",
 ]
 
 [tool.ruff.lint]

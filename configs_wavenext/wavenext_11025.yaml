@@ -1,0 +1,54 @@
+# WaveNeXt fmax=11025 GAN vocoder training config.
+# Generator (VocosBackbone + WaveNextHead) matches matcha/wavenext WAVENEXT_CONFIG so the
+# BSC-LT/wavenext-mel (fmax=8000) weights can warm-start it. Recon loss uses MatchaMelFeatures
+# (fmax=11025) so training and inference share the exact mel domain.
+
+model:
+  feature_extractor:
+    sample_rate: 22050
+    n_fft: 1024
+    hop_length: 256
+    win_length: 1024
+    n_mels: 80
+    fmin: 0
+    fmax: 11025
+    center: false
+  backbone:
+    input_channels: 80
+    dim: 512
+    intermediate_dim: 1536
+    num_layers: 8
+  head:
+    dim: 512
+    n_fft: 1024
+    hop_length: 256
+    padding: same
+  melspec_loss:
+    fmax: 11025
+  exp:
+    initial_learning_rate: 1.0e-4
+    num_warmup_steps: 500
+    max_steps: 1000000
+    mel_loss_coeff: 45
+    mrd_loss_coeff: 0.1
+    pretrain_mel_steps: 2000   # stage 1 (MoeSpeech base). stage 2 (Tsukuyomi fine-tune): 0
+    decay_mel_coeff: false
+    gradient_clip_val: 10.0     # clipped inside the module (manual optimization)
+    mpd_periods: [2, 3, 5, 7, 11]
+    mrd_fft_sizes: [2048, 1024, 512]
+    use_ema: false
+
+data:
+  sampling_rate: 22050
+  num_samples: 16384          # train: random crop (256 * 64)
+  val_num_samples: 48384      # val: longer segment
+  batch_size: 16
+  num_workers: 8
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: bf16-mixed       # T4/V100: override to 32-true
+  max_steps: -1               # stopping is driven by n_batches >= exp.max_steps
+  num_sanity_val_steps: 0
+  log_every_n_steps: 50
