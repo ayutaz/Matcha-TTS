@@ -12,9 +12,11 @@ Usage:
 """
 
 import argparse
+from pathlib import Path
 
 import lightning as L
 import torch
+from lightning.pytorch.callbacks import ModelCheckpoint
 from omegaconf import OmegaConf
 
 from matcha.wavenext.models import VocosBackbone, WaveNextHead
@@ -98,7 +100,15 @@ def main(argv=None):
     tr.pop("gradient_clip_val", None)
     save_dir = tr.pop("default_root_dir", "logs/wavenext")
     logger = build_logger(cfg.get("logger"), save_dir)
-    trainer = L.Trainer(logger=logger, default_root_dir=save_dir, **tr)
+    ckpt_every = int(cfg.get("checkpoint_every_n_steps", 10000))
+    ckpt_cb = ModelCheckpoint(
+        dirpath=str(Path(save_dir) / "checkpoints"),
+        filename="wavenext_{step:07d}",
+        every_n_train_steps=ckpt_every,
+        save_last=True,
+        save_top_k=-1,
+    )
+    trainer = L.Trainer(logger=logger, default_root_dir=save_dir, callbacks=[ckpt_cb], **tr)
     trainer.fit(model, dm, ckpt_path=args.ckpt_path)
 
 
