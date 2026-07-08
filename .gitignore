@@ -178,3 +178,4 @@ eval/vocoder_ja_listen/
 checkpoints/tsukuyomi_finetune_last.ckpt
 checkpoints/tsukuyomi_init_from_jvs.ckpt
 eval/tsukuyomi_synth/
+checkpoints/tsukuyomi_init_spk*.ckpt

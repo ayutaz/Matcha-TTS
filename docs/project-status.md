@@ -92,8 +92,11 @@ prior重み1.0・EMA decay=0.9995・有効バッチ128）は品質退化の実�
 
 | ドキュメント | 内容 |
 |------|------|
+| **`docs/tsukuyomi-tts-verification-log.md`** | **★このセッション(2026-07-07〜09)の全検証ログ: fmax検証/ボコーダ交換/つくよみfine-tune/根本原因診断** |
 | `docs/jvs-aligned-eval-report.md` | 出荷モデルの評価（退化率0%・UTMOS 3.00） |
-| `docs/vocoder-improvement-survey.md` | ボコーダ改善 調査+Phase A/C実測+BigVGAN診断（WaveNeXt本命） |
+| `docs/vocoder-improvement-survey.md` | ボコーダ改善 調査+Phase A/C実測+BigVGAN診断+fmax見送り決定（WaveNeXt本命） |
+| `docs/moe-tsukuyomi-pipeline-plan.md` | MoeSpeech→つくよみ パイプライン計画（fmax=8000維持に方針変更） |
+| `docs/wavenext-training-tdd-plan.md` | WaveNeXt学習コード TDD計画 |
 | `docs/training-speedup-implementation-plan.md` | 学習高速化 実装+A-1実測（A-2見送り） |
 | `docs/training-speed-optimization-survey.md` | 学習高速化 調査（18候補） |
 | `docs/vastai-troubleshooting.md` | vast.ai運用トラブル対応 |
