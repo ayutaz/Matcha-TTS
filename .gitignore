@@ -175,3 +175,6 @@ eval/pure_fmax_listen/
 eval/wavenext_ab_listen/
 eval/vocoder_ja_ab/
 eval/vocoder_ja_listen/
+checkpoints/tsukuyomi_finetune_last.ckpt
+checkpoints/tsukuyomi_init_from_jvs.ckpt
+eval/tsukuyomi_synth/
