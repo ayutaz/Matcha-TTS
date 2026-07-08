@@ -5,11 +5,11 @@ human transcripts). metadata.csv is ``VOICEACTRESS100_NNN|<text>`` (pipe-delimit
 
 Emits ``train.txt`` / ``val.txt`` in precompute_dataset.py's ``wav_path|speaker_id|text``
 format, where speaker_id is the Tsukuyomi slot appended by transfer_speaker_embedding.py
-(default 473 = the base MoeSpeech n_spks). Feed these to:
-    scripts/precompute_dataset.py --filelist ... --fmax 11025 \
-        --mel-mean <BASE_MOE_MEAN> --mel-std <BASE_MOE_STD>
-(mel stats MUST be the base MoeSpeech fmax=11025 values, since strict-load overwrites the
-model's mel_mean/std buffers with the base values — see docs/moe-tsukuyomi-pipeline-plan.md).
+(jvs_aligned base has n_spks=100, so the new slot is 100). Feed these to:
+    scripts/precompute_dataset.py --filelist ... \
+        --mel-mean -6.550095 --mel-std 2.383771
+using the jvs_aligned fmax=8000 mel stats (default --fmax 8000), because strict-load keeps the
+base model's mel_mean/std buffers — precompute must normalize with the same values.
 """
 
 import argparse
@@ -39,7 +39,7 @@ def main(argv=None):
     p.add_argument("--meta", default=None, help="metadata.csv path (default: download from HF)")
     p.add_argument("--wavs-dir", default=None, help="wavs directory (default: download from HF)")
     p.add_argument("--out-dir", default="data/tsukuyomi")
-    p.add_argument("--slot-id", type=int, default=473, help="speaker slot id (= base MoeSpeech n_spks)")
+    p.add_argument("--slot-id", type=int, default=100, help="speaker slot id (= base model n_spks; jvs_aligned=100)")
     p.add_argument("--val-ratio", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args(argv)

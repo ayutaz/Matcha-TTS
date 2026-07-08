@@ -5,16 +5,17 @@ val_pt_dir: /dev/shm/tsukuyomi_precomputed/val
 batch_size: 16
 num_workers: 2
 pin_memory: True
-n_spks: 474          # base MoeSpeech 473 + Tsukuyomi slot (matches transfer_speaker_embedding.py output)
+# jvs_aligned base (n_spks=100) + Tsukuyomi slot (100) -> 101, matching
+# scripts/transfer_speaker_embedding.py --source <jvs_aligned last.ckpt>.
+n_spks: 101
 n_feats: 80
-# NOTE: MUST be the SAME fmax=11025 stats as the base MoeSpeech run. strict-load overwrites
-# the model's mel_mean/std buffers with the base values, so precompute + this config must
-# use the base MoeSpeech stats (not Tsukuyomi-specific ones). PLACEHOLDER until filled in.
+# jvs_aligned's fmax=8000 mel statistics — the base model's mel_mean/std buffers are these,
+# so Tsukuyomi precompute + this config MUST use them (strict-load keeps them).
 data_statistics:
-  mel_mean: 0.0
-  mel_std: 1.0
+  mel_mean: -6.550095
+  mel_std: 2.383771
 seed: ${seed}
-load_durations: false   # MAS (single speaker => no degeneration, the paper's proven setting)
+load_durations: false   # MAS (single speaker => no MAS degeneration, the paper's setting)
 # ~90 utterances x batch 16: num_buckets>=2 fragments into sub-batches that drop_last discards
 # (bucket_size = max(1, n//num_buckets)). num_buckets=1 keeps one bucket -> floor(90/16)=5 batches.
 num_buckets: 1
