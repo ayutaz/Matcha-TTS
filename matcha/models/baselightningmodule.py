@@ -16,6 +16,21 @@ from matcha.utils.utils import plot_tensor
 log = utils.get_pylogger(__name__)
 
 
+def _log_image(logger, tag, image_hwc, step):
+    """Log an HWC image array to whichever logger is active (TensorBoard or WandB).
+
+    TensorBoard exposes ``experiment.add_image``; WandB's ``Run`` does not (it uses
+    ``log_image`` on the WandbLogger). Anything else is silently skipped so training
+    never crashes on the visualization path.
+    """
+    exp = getattr(logger, "experiment", None)
+    if exp is not None and hasattr(exp, "add_image"):
+        exp.add_image(tag, image_hwc, step, dataformats="HWC")
+        return
+    if hasattr(logger, "log_image"):  # WandbLogger
+        logger.log_image(key=tag, images=[image_hwc], step=step)
+
+
 def _cfg_get(cfg, key, default=None):
     """Read a key from a dict / DictConfig / namespace-like scheduler config."""
     if isinstance(cfg, dict):
@@ -199,12 +214,7 @@ class BaseLightningClass(LightningModule, ABC):
                 log.debug("Plotting original samples")
                 for i in range(2):
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
-                    self.logger.experiment.add_image(
-                        f"original/{i}",
-                        plot_tensor(y.squeeze().cpu()),
-                        self.current_epoch,
-                        dataformats="HWC",
-                    )
+                    _log_image(self.logger, f"original/{i}", plot_tensor(y.squeeze().cpu()), self.current_epoch)
 
             log.debug("Synthesising...")
             for i in range(2):
@@ -214,24 +224,9 @@ class BaseLightningClass(LightningModule, ABC):
                 output = self.synthesise(x[:, :x_lengths], x_lengths, n_timesteps=10, spks=spks)
                 y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                 attn = output["attn"]
-                self.logger.experiment.add_image(
-                    f"generated_enc/{i}",
-                    plot_tensor(y_enc.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"generated_dec/{i}",
-                    plot_tensor(y_dec.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"alignment/{i}",
-                    plot_tensor(attn.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
+                _log_image(self.logger, f"generated_enc/{i}", plot_tensor(y_enc.squeeze().cpu()), self.current_epoch)
+                _log_image(self.logger, f"generated_dec/{i}", plot_tensor(y_dec.squeeze().cpu()), self.current_epoch)
+                _log_image(self.logger, f"alignment/{i}", plot_tensor(attn.squeeze().cpu()), self.current_epoch)
 
     def on_before_optimizer_step(self, optimizer):
         grad_norm_interval = getattr(self, "grad_norm_log_interval", 500)
