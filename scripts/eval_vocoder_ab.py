@@ -39,9 +39,18 @@ def parse_speakers(spec):
     return [int(s) for s in spec.split(",")]
 
 
+# Aliases let the same "wavenext" loader run different weight files in one A/B run.
+# Maps an eval label -> (loader_name, checkpoint_path_or_None). Populated in main().
+VOCODER_ALIASES = {}
+
+
 def get_vocoder_path(vocoder_name):
     """Resolve a local checkpoint path for a vocoder, downloading if needed."""
-    if vocoder_name == "wavenext":
+    if vocoder_name in VOCODER_ALIASES:
+        _loader, path = VOCODER_ALIASES[vocoder_name]
+        if path is not None:
+            return path
+    if vocoder_name.startswith("wavenext"):
         from huggingface_hub import hf_hub_download
 
         return hf_hub_download("BSC-LT/wavenext-mel", "pytorch_model.bin")
@@ -52,6 +61,13 @@ def get_vocoder_path(vocoder_name):
     path = save_dir / vocoder_name
     assert_model_downloaded(path, VOCODER_URLS[vocoder_name])
     return str(path)
+
+
+def loader_name(vocoder_name):
+    """The matcha.cli.load_vocoder name to use for a (possibly aliased) eval label."""
+    if vocoder_name in VOCODER_ALIASES:
+        return VOCODER_ALIASES[vocoder_name][0]
+    return vocoder_name
 
 
 def synthesise_mels(model, texts, speakers, n_timesteps, temperature, device):
@@ -92,7 +108,12 @@ def main(argv=None):
     p.add_argument("--output-dir", default="eval/vocoder_ab")
     p.add_argument("--device", default="cpu")
     p.add_argument("--no-utmos", action="store_true", help="only synthesise/vocode, skip scoring")
+    p.add_argument("--wavenext-ja-bin", default=None,
+                   help="local WaveNeXt bin to run under the label 'wavenext_ja' (loaded via the wavenext loader)")
     args = p.parse_args(argv)
+
+    if args.wavenext_ja_bin:
+        VOCODER_ALIASES["wavenext_ja"] = ("wavenext", args.wavenext_ja_bin)
 
     device = torch.device(args.device)
     texts = [t for t in Path(args.text_file).read_text(encoding="utf-8").splitlines() if t.strip()]
@@ -109,7 +130,7 @@ def main(argv=None):
     wav_paths = {v: {} for v in args.vocoders}
     for vname in args.vocoders:
         vpath = get_vocoder_path(vname)
-        vocoder, denoiser = load_vocoder(vname, vpath, device)
+        vocoder, denoiser = load_vocoder(loader_name(vname), vpath, device)
         for it in items:
             rel = f"spk_{it['spk']:03d}/text_{it['idx']:02d}"
             # synthesise() runs under inference_mode, so its mel is an inference tensor;

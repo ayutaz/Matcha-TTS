@@ -173,3 +173,5 @@ eval/onnx/
 checkpoints/wavenext_ja_*.bin
 eval/pure_fmax_listen/
 eval/wavenext_ab_listen/
+eval/vocoder_ja_ab/
+eval/vocoder_ja_listen/
