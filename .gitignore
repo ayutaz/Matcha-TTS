@@ -170,3 +170,6 @@ eval/bigvgan_probe/bigvgan/
 eval/bigvgan_probe/wavenext/
 eval/bigvgan_probe/hifigan_univ_v1/
 eval/onnx/
+checkpoints/wavenext_ja_*.bin
+eval/pure_fmax_listen/
+eval/wavenext_ab_listen/

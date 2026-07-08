@@ -2,9 +2,43 @@
 
 ---
 
-# MoeSpeech 事前学習 → つくよみちゃん fine-tune 実装計画（fmax=11025 / 非破壊）
+## ★方針変更（2026-07-08 確定）: fmax引き上げは見送り、fmax=8000 を維持する
 
-本計画は 5 つの実装 spec と敵対的検証（全て `NEEDS_REVISION`）を統合し、verifier の corrections を全て反映した**実行可能な確定計画**である。品質レシピ（lr=1e-4 / out_size=null / prior重み1.0 / uniform sampling / EMA 0.9995 / bf16-mixed + fused=false）は一切変更しない。既存 JVS 資産（`jvs_*` config/experiment、`jvs_precomputed*`、既存 `.pt`、既存 vocoder）は無改変で、全成果物は新規 file とする。
+**本計画は当初 fmax=8000→11025 引き上げ（濁り改善）を前提に書かれているが、実験の結果 fmax引き上げは見送ることに決定した。** 以下の記述で fmax=11025 とあるのは fmax=8000（既存デフォルト）に読み替える。
+
+### 判断の根拠（Phase W 交絡排除実験、2026-07-08）
+WaveNeXtボコーダを MoeSpeech 3話者・50000バッチで **fmax=11025 と fmax=8000 の2本**学習し、同一val 40 wav で高域(8-11kHz)忠実度を比較（`scripts/eval_highband_fidelity.py`）:
+
+| 指標 | fmax=11025 | fmax=8000（同データ学習） |
+|------|:---:|:---:|
+| 高域(8-11kHz) log-STFT L1 | **0.825**（低い=GTに近い） | 1.031 |
+| 高域エネルギー比（1が理想） | **0.851** | 0.553（45%欠損） |
+| paired 高域L1 | fmax=11025が40/40でGTに近い | — |
+
+- **客観的には fmax引き上げは独立して効く**（同データ・同ステップでもfmax=8000は高域45%欠損のまま。データ変更では埋まらない）
+- **しかしユーザ試聴では体感差なし**（同一サンプルの純粋fmax差A/B、`eval/pure_fmax_listen/`）
+- → **体感差がないのに、fmax引き上げの破壊的変更（mel統計再計算・全前処理やり直し・音響モデル全再学習 $27-53）を払うのは割に合わない**と判断
+- 最終判断はユーザの聴感を優先（UTMOSより試聴を決め手にする方針と一貫）
+
+### fmax=8000 維持による帰結（この計画への修正）
+- **precompute の `--fmax` は既存デフォルト 8000 のまま**（moe/tsukuyomi の mel も fmax=8000）
+- **mel統計は fmax=8000 で算出**（`prepare_moespeech.py stats` は F_MAX=11025 ハードコードを 8000 に直すか `--fmax` 化が必要 → §後述の未対応事項）
+- **JVS mel統計（-6.550095 / 2.383771）が fmax=8000 で整合** → 一貫チェーンが既存資産と互換
+- **ボコーダは今回学習した fmax=8000 版**（`checkpoints/wavenext_ja_8000_50kbatch.bin`、MoeSpeech日本語適合済み）を初期値/採用候補に使える
+- 「日本語データでのボコーダ+音響モデル再学習」ぶんの濁り改善（実測で存在）は引き続き得られる
+- **破壊的変更が消え、既存fmax=8000パイプライン・JVS資産と互換になる**（実装リスク・コスト大幅減）
+
+### fmax=8000 維持で要修正の実装箇所（着手時に対応）
+- `scripts/prepare_moespeech.py` L52 `F_MAX = 11025` → 8000（または `--fmax` CLI化）。stats/precompute の mel が fmax=8000 になる
+- `configs/data/moespeech_precomputed.yaml` / `tsukuyomi_precomputed.yaml` のコメント「fmax=11025統計」を fmax=8000 に
+- `configs_wavenext/wavenext_11025.yaml` は fmax=11025 用。fmax=8000 で使うなら `fmax: 8000` 版configで（今回の実験で実証済みの sed 変換と同じ）
+- placeholder ガード（train.py D4）はそのまま有効
+
+---
+
+# MoeSpeech 事前学習 → つくよみちゃん fine-tune 実装計画（~~fmax=11025~~ **fmax=8000維持** / 非破壊）
+
+本計画は 5 つの実装 spec と敵対的検証（全て `NEEDS_REVISION`）を統合し、verifier の corrections を全て反映した**実行可能な確定計画**である。**上記の方針変更により fmax は 8000 を維持する**（本文の fmax=11025 は 8000 に読み替え）。品質レシピ（lr=1e-4 / out_size=null / prior重み1.0 / uniform sampling / EMA 0.9995 / bf16-mixed + fused=false）は一切変更しない。既存 JVS 資産（`jvs_*` config/experiment、`jvs_precomputed*`、既存 `.pt`、既存 vocoder）は無改変で、全成果物は新規 file とする。
 
 ---
 

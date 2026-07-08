@@ -1,5 +1,13 @@
 # ボコーダ改善 調査レポート（2026-07-07）
 
+> **★fmax=11025 実験の結論（2026-07-08 追記）**: WaveNeXtボコーダを MoeSpeech で fmax=11025 と
+> fmax=8000 の2本学習し交絡排除A/Bで比較した結果、**fmax引き上げは高域(8-11kHz)を客観的には改善するが
+> （エネルギー比 0.55→0.85、40/40でGTに近い）、ユーザ試聴では体感差なし**。体感差がないのに
+> mel統計再計算・全前処理やり直し・音響モデル全再学習という破壊的変更（$27-53）は割に合わないため、
+> **fmax引き上げは見送り、fmax=8000 を維持する**ことに決定。詳細と要修正箇所は
+> `docs/moe-tsukuyomi-pipeline-plan.md` 冒頭の「方針変更」節。成果物: `checkpoints/wavenext_ja_8000_50kbatch.bin`
+> （MoeSpeech日本語適合済みWaveNeXt、fmax=8000）、`scripts/eval_highband_fidelity.py`（高域評価）。
+
 日本語Matcha-TTS（`jvs_aligned`、2500ep完走モデル）の音質頭打ちはボコーダ由来と診断済み
 （`docs/jvs-aligned-eval-report.md`: 学習モデルUTMOS 3.00 ≈ 汎用HiFi-GAN天井2.90）。
 アコースティックモデルは既にボコーダ天井到達で、**残る音質向上の余地はボコーダ側にある**。
