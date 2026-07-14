@@ -118,13 +118,26 @@ tsukuyomi vs mean-init: cos=1.000  L2=0.031
 
 **つくよみの話者embeddingが学習でほぼ全く動いていない**（cos類似度1.000・L2距離0.031）。
 
-原因:
-- Matchaの話者embeddingへの勾配は encoder の detach 経由でしか流れない構造
-- EMA（decay=0.9995）が話者embeddingの変化を強く平滑化 → 平均init付近に固定
-- 90発話・33分ではこの平滑化を押しのける力が足りなかった
-
 → **fine-tuneは走ったが話者embeddingがほぼ初期値（JVS平均声）のまま** = だから「JVS平均っぽい声」。
-**Matchaの単一話者特化には構造的限界がある可能性**。
+
+#### 真因は未特定（★2026-07-09 訂正）
+当初「話者embeddingへの勾配が detach 経由でしか流れないため」と記載したが、**これはコードを読むと誤り**。
+`spk_emb` には**3つの生きた勾配経路**がある:
+- `text_encoder.py` L469 `x = torch.cat([x, spks...])`（detach無し）→ `proj_m` → mu_x → prior loss / decoder条件付け
+- `text_encoder.py` L473-474: `x_dp = torch.detach(x)` だが **spks は別引数で DP の FiLM に渡る**
+  （`proj_w(x_dp, spks=spks)`）→ dur loss の勾配が spk_emb に届く
+- `matcha_tts.py` L270 `decoder.compute_loss(..., spks=spks)`（detach無し）→ diff loss
+
+**detach(L473) が止めているのは DP の「フレーム特徴 x」だけで、話者embeddingではない。**
+
+観測（cos=1.000）は事実だが、**なぜ動かなかったのかは未解明**。候補:
+- EMA（decay=0.9995）による平滑化が変化を吸収
+- 64次元 spk_emb + FiLM 条件付けのレバーが弱い
+- 90発話という小データ
+- 全話者平均init が低勾配の谷になっている
+
+**必要な追加ablation**: spk_emb への勾配ノルム測定 / raw重み(current_model_state) vs EMA重みの比較 /
+EMA off・LR引き上げでの再学習。**安易に原因を断定しないこと**。
 
 ### 5-6. 検討した改善策（未実施）
 - **近い話者init**: 学習済みembeddingに最も近いJVS話者を特定（cos: 話者80, L2: 話者85）。
