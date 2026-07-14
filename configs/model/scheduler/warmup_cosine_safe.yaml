@@ -1,0 +1,8 @@
+# Safe warmup + cosine decay for JVS Japanese training
+# Peak lr stays at 1e-4 (per original paper) — only the schedule shape changes.
+# Built via SequentialLR in configure_optimizers (not Hydra _target_).
+type: warmup_cosine_safe
+warmup_steps: 500      # ~5-6 epochs of linear warmup (lr * start_factor → lr)
+start_factor: 0.1      # start at lr * 0.1 = 1e-5
+T_max: 20000           # total cosine annealing steps (~500 epochs * 40 steps)
+eta_min: 5e-5          # floor at half of peak lr (conservative)

@@ -1,0 +1,20 @@
+_target_: matcha.data.precomputed_datamodule.PrecomputedTextMelDataModule
+name: moespeech_precomputed
+# subset dirs by default; override to the full-set dirs for Phase 3
+train_pt_dir: /dev/shm/moespeech_precomputed_subset/train
+val_pt_dir: /dev/shm/moespeech_precomputed_subset/val
+batch_size: 32
+num_workers: 8
+pin_memory: True
+n_spks: 473          # fixed at the full speaker count even for subsets (global id space preserved)
+n_feats: 80
+# NOTE: these are the fmax=11025 raw-log-mel statistics from
+#   scripts/prepare_moespeech.py stats
+# They are PLACEHOLDERS (0.0/1.0) — training is refused until the real values are filled in
+# (train.py placeholder guard). Do NOT reuse the JVS fmax=8000 stats (-6.550095 / 2.383771).
+data_statistics:
+  mel_mean: 0.0
+  mel_std: 1.0
+seed: ${seed}
+load_durations: false   # MAS path (no precomputed durations)
+num_buckets: 20

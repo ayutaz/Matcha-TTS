@@ -3,9 +3,10 @@ name = "matcha-tts"
 dynamic = ["version"]
 description = "Matcha-TTS: A fast TTS architecture with conditional flow matching"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Shivam Mehta", email = "shivam.mehta25@gmail.com" },
+    { name = "ayutaz", email = "ka1357amnbpdr@gmail.com" },
 ]
 license = "MIT"
 classifiers = [
@@ -13,8 +14,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -35,9 +34,12 @@ dependencies = [
     # audio / text
     "phonemizer",
     "librosa",
+    "soundfile",  # direct use in precompute / wavenext_train dataset (torchaudio.load unusable on torch>=2.10)
     "scipy",
     "inflect",
     "Unidecode",
+    "pyopenjtalk-plus",
+    "onnxruntime>=1.14.0",  # pyopenjtalk-plus の「何」読み分け (Nani prediction) に必要
     # model components
     "conformer==0.3.2",
     "diffusers",
@@ -46,15 +48,20 @@ dependencies = [
     "rootutils",
     "rich",
     "tensorboard",
+    "wandb",
     "numpy",
     "gdown",
     "wget",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
 onnx = [
     "onnxruntime>=1.14.0",
     "onnx>=1.14.0",
+    # torch>=2.9 routes torch.onnx.export through the dynamo path unless dynamo=False;
+    # the exporter still imports onnxscript at module load, so it is required to export.
+    "onnxscript>=0.7.0",
 ]
 onnx-gpu = [
     "onnxruntime-gpu>=1.14.0",
@@ -73,6 +80,7 @@ logging = [
 
 [dependency-groups]
 dev = [
+    "gdown>=5.2.1",
     "pre-commit",
     "ruff",
 ]
@@ -112,11 +120,12 @@ matcha = ["VERSION", "**/*.json", "**/*.html", "**/*.png", "**/*.md", "**/*.pyx"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 exclude = [
     ".eggs", ".git", ".hg", ".mypy_cache", ".tox", ".venv",
     "_build", "buck-out", "build", "dist",
-    "logs", "data", "matcha/hifigan",
+    # アンカー必須: "data" だと matcha/data/ もベースネーム一致で除外される
+    "/logs", "/data", "matcha/hifigan", "matcha/wavenext", "wavenext_train",
 ]
 
 [tool.ruff.lint]
@@ -181,6 +190,7 @@ testpaths = "tests/"
 source = ["matcha"]
 omit = [
     "matcha/hifigan/*",
+    "matcha/wavenext/*",
     "matcha/app.py",
     "matcha/train.py",
 ]

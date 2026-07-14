@@ -1,0 +1,23 @@
+_target_: matcha.data.text_mel_datamodule.TextMelDataModule
+name: jsut
+train_filelist_path: data/jsut/train.txt
+valid_filelist_path: data/jsut/val.txt
+batch_size: 32
+num_workers: 20
+pin_memory: True
+cleaners: [japanese_cleaners]
+add_blank: True
+n_spks: 1
+n_fft: 1024
+n_feats: 80
+sample_rate: 22050
+hop_length: 256
+win_length: 1024
+f_min: 0
+f_max: 8000
+language: ja
+data_statistics:  # To be computed with matcha-data-stats -i jsut.yaml
+  mel_mean: null
+  mel_std: null
+seed: ${seed}
+load_durations: false

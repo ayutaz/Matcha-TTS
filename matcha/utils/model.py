@@ -1,5 +1,7 @@
 """from https://github.com/jaywalnut310/glow-tts"""
 
+import math
+
 import numpy as np
 import torch
 
@@ -12,12 +14,14 @@ def sequence_mask(length, max_length=None):
 
 
 def fix_len_compatibility(length, num_downsamplings_in_unet=2):
-    factor = torch.scalar_tensor(2).pow(num_downsamplings_in_unet)
-    length = (length / factor).ceil() * factor
-    if not torch.onnx.is_in_onnx_export():
-        return length.int().item()
-    else:
+    factor = 2**num_downsamplings_in_unet
+    if isinstance(length, torch.Tensor):
+        length = (length.float() / factor).ceil() * factor
+        if not torch.onnx.is_in_onnx_export():
+            return length.int().item()
         return length
+    else:
+        return int(math.ceil(length / factor) * factor)
 
 
 def convert_pad_shape(pad_shape):
@@ -53,7 +57,7 @@ def normalize(data, mu, std):
         elif isinstance(mu, torch.Tensor):
             mu = mu.to(data.device)
         elif isinstance(mu, np.ndarray):
-            mu = torch.from_numpy(mu).to(data.device)
+            mu = torch.from_numpy(mu).to(device=data.device, dtype=data.dtype)
         mu = mu.unsqueeze(-1)
 
     if not isinstance(std, (float, int)):
@@ -62,29 +66,29 @@ def normalize(data, mu, std):
         elif isinstance(std, torch.Tensor):
             std = std.to(data.device)
         elif isinstance(std, np.ndarray):
-            std = torch.from_numpy(std).to(data.device)
+            std = torch.from_numpy(std).to(device=data.device, dtype=data.dtype)
         std = std.unsqueeze(-1)
 
     return (data - mu) / std
 
 
 def denormalize(data, mu, std):
-    if not isinstance(mu, float):
+    if not isinstance(mu, (float, int)):
         if isinstance(mu, list):
             mu = torch.tensor(mu, dtype=data.dtype, device=data.device)
         elif isinstance(mu, torch.Tensor):
             mu = mu.to(data.device)
         elif isinstance(mu, np.ndarray):
-            mu = torch.from_numpy(mu).to(data.device)
+            mu = torch.from_numpy(mu).to(device=data.device, dtype=data.dtype)
         mu = mu.unsqueeze(-1)
 
-    if not isinstance(std, float):
+    if not isinstance(std, (float, int)):
         if isinstance(std, list):
             std = torch.tensor(std, dtype=data.dtype, device=data.device)
         elif isinstance(std, torch.Tensor):
             std = std.to(data.device)
         elif isinstance(std, np.ndarray):
-            std = torch.from_numpy(std).to(data.device)
+            std = torch.from_numpy(std).to(device=data.device, dtype=data.dtype)
         std = std.unsqueeze(-1)
 
     return data * std + mu

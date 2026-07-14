@@ -1,0 +1,23 @@
+_target_: matcha.data.text_mel_datamodule.TextMelDataModule
+name: jvs
+train_filelist_path: data/jvs/train.txt
+valid_filelist_path: data/jvs/val.txt
+batch_size: 32
+num_workers: 4
+pin_memory: True
+cleaners: [japanese_cleaners]
+add_blank: True
+n_spks: 100
+n_fft: 1024
+n_feats: 80
+sample_rate: 22050
+hop_length: 256
+win_length: 1024
+f_min: 0
+f_max: 8000
+language: ja
+data_statistics:
+  mel_mean: -6.963938
+  mel_std: 2.478805
+seed: ${seed}
+load_durations: false

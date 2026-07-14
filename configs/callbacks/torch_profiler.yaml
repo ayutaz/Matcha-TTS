@@ -1,0 +1,13 @@
+# Kernel-level profiling run (A-1). Select with: callbacks=torch_profiler
+# Keeps the standard callbacks and adds a torch.profiler window on rank 0.
+defaults:
+  - default
+
+torch_profiler:
+  _target_: matcha.callbacks.torch_profiler_callback.TorchProfilerCallback
+  wait: 5
+  warmup: 5
+  active: 20
+  row_limit: 30
+  trace_dir: ${paths.output_dir}/profiler
+  record_shapes: true

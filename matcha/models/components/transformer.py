@@ -61,11 +61,17 @@ class SnakeBeta(nn.Module):
 
         self.no_div_by_zero = 0.000000001
 
+    @torch.compiler.disable
     def forward(self, x):
         """
         Forward pass of the function.
         Applies the function to the input elementwise.
         SnakeBeta ∶= x + 1/b * sin^2 (xa)
+
+        Note: decorated with @torch.compiler.disable to prevent
+        torch.compile/Inductor from tracing through exp/sin/pow ops,
+        which trigger a sympy assertion error in Inductor's symbolic
+        shape analysis.
         """
         x = self.proj(x)
         if self.alpha_logscale:

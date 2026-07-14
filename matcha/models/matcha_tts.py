@@ -1,8 +1,8 @@
 import datetime as dt
 import math
-import random
 
 import torch
+import torch.nn.functional as F
 
 import matcha.utils.monotonic_align as monotonic_align  # pylint: disable=consider-using-from-import
 from matcha import utils
@@ -18,6 +18,8 @@ from matcha.utils.model import (
 )
 
 log = utils.get_pylogger(__name__)
+
+LOG_2PI = math.log(2 * math.pi)
 
 
 class MatchaTTS(BaseLightningClass):  # 🍵
@@ -73,7 +75,9 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         self.update_data_statistics(data_statistics)
 
     @torch.inference_mode()
-    def synthesise(self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0):
+    def synthesise(
+        self, x, x_lengths, n_timesteps, temperature=1.0, spks=None, length_scale=1.0, clamp_boundary_blanks=True
+    ):
         """
         Generates mel-spectrogram from text. Returns:
             1. encoder outputs
@@ -91,6 +95,12 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 shape: (batch_size,)
             length_scale (float, optional): controls speech pace.
                 Increase value to slow down generated speech and vice versa.
+            clamp_boundary_blanks (bool, optional): if True, clamp the durations of the
+                first and last valid tokens to max 3.0 frames. Assumes `x` is a
+                blank-interspersed sequence (as produced by intersperse() in
+                process_text), where those positions are boundary blanks. On
+                non-interspersed input this clamps the first/last real phonemes
+                instead — pass False in that case. Defaults to True.
 
         Returns:
             dict: {
@@ -106,6 +116,8 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 # Lengths of mel spectrograms
                 "rtf": float,
                 # Real-time factor
+                "durations": torch.Tensor, shape: (batch_size, max_text_length),
+                # Predicted duration per token (in frames)
             }
         """
         # For RTF computation
@@ -119,6 +131,13 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         mu_x, logw, x_mask = self.encoder(x, x_lengths, spks)
 
         w = torch.exp(logw) * x_mask
+        # Clamp boundary blank durations (positions 0 and -1 in interspersed sequence)
+        # to prevent duration predictor instability on edge tokens
+        if clamp_boundary_blanks:
+            for b in range(w.shape[0]):
+                seq_len = x_lengths[b].item()
+                w[b, 0, 0] = w[b, 0, 0].clamp(max=3.0)  # first blank
+                w[b, 0, seq_len - 1] = w[b, 0, seq_len - 1].clamp(max=3.0)  # last blank
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_max_length = y_lengths.max()
@@ -148,6 +167,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             "mel": denormalize(decoder_outputs, self.mel_mean, self.mel_std),
             "mel_lengths": y_lengths,
             "rtf": rtf,
+            "durations": w_ceil.squeeze(1),  # predicted duration per token (B, T_text)
         }
 
     def forward(self, x, x_lengths, y, y_lengths, spks=None, out_size=None, cond=None, durations=None):
@@ -170,10 +190,14 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 Should be divisible by 2^{num of UNet downsamplings}. Needed to increase batch size.
             spks (torch.Tensor, optional): speaker ids.
                 shape: (batch_size,)
+            durations (torch.Tensor, optional): precomputed phoneme durations from external aligner
+                (e.g. Julius forced alignment via convert_julius_to_durations.py).
+                May be int64 or float32; converted to float internally for generate_path().
+                shape: (batch_size, 1, max_text_length) or (batch_size, max_text_length)
         """
         if self.n_spks > 1:
-            # Get speaker embedding
-            spks = self.spk_emb(spks)
+            # Get speaker embedding (cast like synthesise() so float/int ids work in both paths)
+            spks = self.spk_emb(spks.long())
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(x, x_lengths, spks)
@@ -183,47 +207,56 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
 
         if self.use_precomputed_durations:
-            attn = generate_path(durations.squeeze(1), attn_mask.squeeze(1))
+            # M1出力のdurationはint64の可能性があるため、float変換して
+            # generate_path内のcumsum/sequence_maskとの型整合性を保証
+            durations_f = durations.float()
+            if durations_f.dim() == 3:
+                durations_f = durations_f.squeeze(1)
+            assert durations_f.dim() == 2, f"Expected 2D durations (B, T_text), got shape {durations_f.shape}"
+            attn = generate_path(durations_f, attn_mask.squeeze(1))
         else:
             # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
-            with torch.no_grad():
-                const = -0.5 * math.log(2 * math.pi) * self.n_feats
-                factor = -0.5 * torch.ones(mu_x.shape, dtype=mu_x.dtype, device=mu_x.device)
-                y_square = torch.matmul(factor.transpose(1, 2), y**2)
-                y_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), y)
-                mu_square = torch.sum(factor * (mu_x**2), 1).unsqueeze(-1)
-                log_prior = y_square - y_mu_double + mu_square + const
+            # Disable autocast: MAS requires FP32 for numerical stability of log-prior matmul
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=False):
+                mu_x_f = mu_x.float()
+                y_f = y.float()
+                const = -0.5 * LOG_2PI * self.n_feats
+                y_square = -0.5 * torch.sum(y_f**2, 1, keepdim=True)
+                y_mu_double = torch.matmul(mu_x_f.transpose(1, 2), y_f)
+                mu_square = -0.5 * torch.sum(mu_x_f**2, 1).unsqueeze(-1)
+                log_prior = y_square + y_mu_double + mu_square + const
 
                 attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
                 attn = attn.detach()  # b, t_text, T_mel
 
         # Compute loss between predicted log-scaled durations and those obtained from MAS
         # refered to as prior loss in the paper
-        logw_ = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
-        dur_loss = duration_loss(logw, logw_, x_lengths)
+        # FP32 cast: (logw - logw_)**2 can overflow in FP16
+        logw_ = torch.log(1e-6 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
+        dur_loss = duration_loss(logw.float(), logw_.float(), x_lengths)
 
         # Cut a small segment of mel-spectrogram in order to increase batch size
         #   - "Hack" taken from Grad-TTS, in case of Grad-TTS, we cannot train batch size 32 on a 24GB GPU without it
         #   - Do not need this hack for Matcha-TTS, but it works with it as well
         if not isinstance(out_size, type(None)):
             max_offset = (y_lengths - out_size).clamp(0)
-            offset_ranges = list(zip([0] * max_offset.shape[0], max_offset.cpu().numpy()))
-            out_offset = torch.LongTensor(
-                [torch.tensor(random.choice(range(start, end)) if end > start else 0) for start, end in offset_ranges]
-            ).to(y_lengths)
+            out_offset = torch.randint(
+                0, 2**63 - 1, (max_offset.shape[0],), dtype=torch.long, device=max_offset.device
+            ) % max_offset.clamp(min=1)
             attn_cut = torch.zeros(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
             y_cut = torch.zeros(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
 
-            y_cut_lengths = []
+            batch_size = attn.shape[0]
+            y_cut_lengths = torch.empty(batch_size, dtype=torch.long, device=y_lengths.device)
             for i, (y_, out_offset_) in enumerate(zip(y, out_offset)):
                 y_cut_length = out_size + (y_lengths[i] - out_size).clamp(None, 0)
-                y_cut_lengths.append(y_cut_length)
+                y_cut_lengths[i] = y_cut_length
                 cut_lower, cut_upper = out_offset_, out_offset_ + y_cut_length
                 y_cut[i, :, :y_cut_length] = y_[:, cut_lower:cut_upper]
                 attn_cut[i, :, :y_cut_length] = attn[i, :, cut_lower:cut_upper]
-
-            y_cut_lengths = torch.LongTensor(y_cut_lengths)
-            y_cut_mask = sequence_mask(y_cut_lengths).unsqueeze(1).to(y_mask)
+            # Mask length must match the allocated out_size time dim: with an all-short
+            # batch max(y_cut_lengths) < out_size and the default length would mismatch
+            y_cut_mask = sequence_mask(y_cut_lengths, out_size).unsqueeze(1).to(y_mask)
 
             attn = attn_cut
             y = y_cut
@@ -237,9 +270,17 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=cond)
 
         if self.prior_loss:
-            prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
-            prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
+            masked_n = torch.sum(y_mask) * self.n_feats
+            # FP32 cast: reduction="sum" on large tensors can overflow FP16
+            prior_loss = 0.5 * (
+                F.mse_loss(y.float() * y_mask, mu_y.float() * y_mask, reduction="sum") / masked_n + LOG_2PI
+            )
         else:
             prior_loss = 0
 
         return dur_loss, prior_loss, diff_loss, attn
+
+    def enable_gradient_checkpointing(self):
+        """Enable gradient checkpointing on the decoder's estimator to reduce memory usage."""
+        if hasattr(self.decoder, "estimator") and hasattr(self.decoder.estimator, "enable_gradient_checkpointing"):
+            self.decoder.estimator.enable_gradient_checkpointing()

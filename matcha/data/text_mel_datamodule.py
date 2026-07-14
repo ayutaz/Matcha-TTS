@@ -42,6 +42,7 @@ class TextMelDataModule(LightningDataModule):
         data_statistics,
         seed,
         load_durations,
+        language="en",
     ):
         super().__init__()
 
@@ -49,7 +50,7 @@ class TextMelDataModule(LightningDataModule):
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
 
-    def setup(self, stage: Optional[str] = None):  # pylint: disable=unused-argument
+    def setup(self, stage: str | None = None):  # pylint: disable=unused-argument
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
 
         This method is called by lightning with both `trainer.fit()` and `trainer.test()`, so be
@@ -72,6 +73,7 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
+            language=getattr(self.hparams, "language", "en"),
         )
         self.validset = TextMelDataset(  # pylint: disable=attribute-defined-outside-init
             self.hparams.valid_filelist_path,
@@ -88,29 +90,41 @@ class TextMelDataModule(LightningDataModule):
             self.hparams.data_statistics,
             self.hparams.seed,
             self.hparams.load_durations,
+            language=getattr(self.hparams, "language", "en"),
         )
 
     def train_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.trainset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            drop_last=True,
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
+            **kwargs,
         )
 
     def val_dataloader(self):
+        kwargs = {}
+        if self.hparams.num_workers > 0:
+            kwargs["persistent_workers"] = True
+            kwargs["prefetch_factor"] = 4
         return DataLoader(
             dataset=self.validset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
-            collate_fn=TextMelBatchCollate(self.hparams.n_spks),
+            collate_fn=TextMelBatchCollate(self.hparams.n_spks, load_durations=self.hparams.load_durations),
+            **kwargs,
         )
 
-    def teardown(self, stage: Optional[str] = None):
+    def teardown(self, stage: str | None = None):
         """Clean up after fit or test."""
         pass  # pylint: disable=unnecessary-pass
 
@@ -118,7 +132,7 @@ class TextMelDataModule(LightningDataModule):
         """Extra things to save to checkpoint."""
         return {}
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: dict[str, Any]):
         """Things to do when loading checkpoint."""
         pass  # pylint: disable=unnecessary-pass
 
@@ -140,6 +154,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         data_parameters=None,
         seed=None,
         load_durations=False,
+        language="en",
     ):
         self.filepaths_and_text = parse_filelist(filelist_path)
         self.n_spks = n_spks
@@ -153,13 +168,14 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.f_min = f_min
         self.f_max = f_max
         self.load_durations = load_durations
+        self.language = language
 
         if data_parameters is not None:
             self.data_parameters = data_parameters
         else:
             self.data_parameters = {"mel_mean": 0, "mel_std": 1}
-        random.seed(seed)
-        random.shuffle(self.filepaths_and_text)
+        # Local RNG: never reseed the global random module (process-wide side effect)
+        random.Random(seed).shuffle(self.filepaths_and_text)
 
     def get_datapoint(self, filepath_and_text):
         if self.n_spks > 1:
@@ -189,10 +205,11 @@ class TextMelDataset(torch.utils.data.Dataset):
 
         except FileNotFoundError as e:
             raise FileNotFoundError(
-                f"Tried loading the durations but durations didn't exist at {dur_loc}, make sure you've generate the durations first using: python matcha/utils/get_durations_from_trained_model.py \n"
+                f"Tried loading the durations but durations didn't exist at {dur_loc}, make sure you've generated the durations first using: python matcha/utils/get_durations_from_trained_model.py \n"
             ) from e
 
-        assert len(durs) == len(text), f"Length of durations {len(durs)} and text {len(text)} do not match"
+        if len(durs) != len(text):
+            raise ValueError(f"Length of durations {len(durs)} and text {len(text)} do not match")
 
         return durs
 
@@ -213,9 +230,11 @@ class TextMelDataset(torch.utils.data.Dataset):
         mel = normalize(mel, self.data_parameters["mel_mean"], self.data_parameters["mel_std"])
         return mel
 
-    def get_text(self, text, add_blank=True):
-        text_norm, cleaned_text = text_to_sequence(text, self.cleaners)
-        if self.add_blank:
+    def get_text(self, text, add_blank=None):
+        if add_blank is None:
+            add_blank = self.add_blank
+        text_norm, cleaned_text = text_to_sequence(text, self.cleaners, language=self.language)
+        if add_blank:
             text_norm = intersperse(text_norm, 0)
         text_norm = torch.IntTensor(text_norm)
         return text_norm, cleaned_text
@@ -229,14 +248,22 @@ class TextMelDataset(torch.utils.data.Dataset):
 
 
 class TextMelBatchCollate:
-    def __init__(self, n_spks):
+    def __init__(self, n_spks, load_durations=False):
         self.n_spks = n_spks
+        self.load_durations = load_durations
+        self._len_compat_cache: dict[int, int] = {}
+
+    def _fix_len_compat(self, length):
+        """Cached version of fix_len_compatibility."""
+        if length not in self._len_compat_cache:
+            self._len_compat_cache[length] = fix_len_compatibility(length)
+        return self._len_compat_cache[length]
 
     def __call__(self, batch):
         B = len(batch)
-        y_max_length = max([item["y"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
-        x_max_length = max([item["x"].shape[-1] for item in batch])  # pylint: disable=consider-using-generator
+        y_max_length = max(item["y"].shape[-1] for item in batch)
+        y_max_length = self._fix_len_compat(y_max_length)
+        x_max_length = max(item["x"].shape[-1] for item in batch)
         n_feats = batch[0]["y"].shape[-2]
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
@@ -256,7 +283,7 @@ class TextMelBatchCollate:
             filepaths.append(item["filepath"])
             x_texts.append(item["x_text"])
             if item["durations"] is not None:
-                durations[i, : item["durations"].shape[-1]] = item["durations"]
+                durations[i, : item["durations"].shape[-1]] = item["durations"].long()
 
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)
@@ -270,5 +297,7 @@ class TextMelBatchCollate:
             "spks": spks,
             "filepaths": filepaths,
             "x_texts": x_texts,
-            "durations": durations if not torch.eq(durations, 0).all() else None,
+            # load_durations=True: always return duration tensor (skip all-zero check)
+            # load_durations=False: existing behaviour (all-zero -> None)
+            "durations": durations if self.load_durations or not torch.eq(durations, 0).all() else None,
         }

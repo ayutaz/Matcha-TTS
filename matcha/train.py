@@ -1,8 +1,10 @@
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
 import lightning as L
 import rootutils
+import torch
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
@@ -31,6 +33,21 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 log = utils.get_pylogger(__name__)
 
 
+def setup_cuda_optimizations():
+    """Enable CUDA optimizations for faster training."""
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    log.info(
+        "CUDA optimizations enabled: cudnn.benchmark=%s, cudnn.deterministic=%s, TF32 matmul=%s, TF32 cudnn=%s",
+        torch.backends.cudnn.benchmark,
+        torch.backends.cudnn.deterministic,
+        torch.backends.cuda.matmul.allow_tf32,
+        torch.backends.cudnn.allow_tf32,
+    )
+
+
 @utils.task_wrapper
 def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
@@ -42,15 +59,84 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
     """
+    # NCCL optimization for multi-GPU training
+    os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
+
+    # Guard against training with placeholder mel statistics (mean=0.0/std=1.0). New
+    # precomputed pipelines (e.g. fmax=11025 moe/tsukuyomi) start with 0.0/1.0 placeholders
+    # that must be replaced by the real stats from the stats pass; z-score normalization with
+    # std=1.0/mean=0.0 is a no-op that silently degrades training.
+    stats = cfg.data.get("data_statistics") if hasattr(cfg.data, "get") else None
+    if stats is not None:
+        mean, std = stats.get("mel_mean"), stats.get("mel_std")
+        if mean == 0.0 and std == 1.0:
+            raise ValueError(
+                "data_statistics is the placeholder (mel_mean=0.0, mel_std=1.0). "
+                "Compute real stats (scripts/prepare_moespeech.py stats / matcha-data-stats) "
+                "and set them in the data config before training."
+            )
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")  # pylint: disable=protected-access
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")  # pylint: disable=protected-access
     model: LightningModule = hydra.utils.instantiate(cfg.model)
+
+    # A-2: Regional torch.compile of the decoder's repeated transformer blocks.
+    # Unlike full-model compile, this is DDP-safe (compiled region stays inside the
+    # dynamic-shape guard scope and outside the DDP wrapper -> no pytorch#140229 blowup)
+    # and uses nn.Module.compile() in-place so state_dict keys are unchanged.
+    # Applied BEFORE trainer.fit() so it happens before the DDP wrap. Opt-in and
+    # default-OFF: with compile_regional_blocks=false the model is byte-identical.
+    compile_regional = cfg.get("compile_regional_blocks", False)
+    if compile_regional and cfg.get("gradient_checkpointing", False):
+        # grad_checkpoint over a compiled block is unverified territory; refuse to mix.
+        log.warning(
+            "compile_regional_blocks=true is skipped because gradient_checkpointing=true "
+            "(checkpointing a compiled block is unverified). Disable one of them."
+        )
+        compile_regional = False
+
+    if compile_regional:
+        compile_mode = cfg.get("compile_mode", "default")
+        log.info("Regionally compiling decoder transformer blocks with torch.compile (mode=%s)...", compile_mode)
+        n_compiled = model.decoder.estimator.compile_regions(mode=compile_mode)
+        log.info("Regional compile applied to %d transformer blocks.", n_compiled)
+    elif cfg.get("compile_model", False):
+        # Legacy full-estimator compile. DDP + torch.compile causes NCCL watchdog hangs
+        # during initial compilation (GIL contention in CUDA APIs across ranks), so only
+        # compile for single-GPU training.
+        num_devices = cfg.trainer.get("devices", 1)
+        strategy = cfg.trainer.get("strategy", "auto")
+        is_multi_gpu = (isinstance(num_devices, (list, tuple)) and len(num_devices) > 1) or (
+            isinstance(num_devices, int) and num_devices > 1
+        )
+        is_ddp_strategy = hasattr(strategy, "_target_") and "DDP" in str(strategy._target_)
+        is_ddp = is_multi_gpu or is_ddp_strategy or (isinstance(strategy, str) and "ddp" in strategy)
+        if is_ddp:
+            log.warning("compile_model=true is incompatible with DDP (NCCL hang). Skipping compilation.")
+        else:
+            compile_mode = cfg.get("compile_mode", "default")
+            # Only compile the decoder estimator. The encoder contains einops.rearrange
+            # (in text_encoder.py) which causes torch.compile graph breaks.
+            log.info("Compiling decoder.estimator with torch.compile (mode=%s)...", compile_mode)
+            model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+
+    if cfg.get("gradient_checkpointing", False):
+        if hasattr(model, "enable_gradient_checkpointing"):
+            model.enable_gradient_checkpointing()
+            # Verify gradient checkpointing is active on the decoder estimator
+            estimator = getattr(getattr(model, "decoder", None), "estimator", None)
+            if estimator is not None and getattr(estimator, "use_gradient_checkpointing", False):
+                log.info("Gradient checkpointing enabled and verified on decoder estimator.")
+            else:
+                log.warning("Gradient checkpointing was requested but could not be verified on decoder estimator.")
+        else:
+            log.warning("Model does not support enable_gradient_checkpointing(); skipping.")
 
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = utils.instantiate_callbacks(cfg.get("callbacks"))
@@ -76,7 +162,25 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+        ckpt_path = cfg.get("ckpt_path")
+        if ckpt_path:
+            # Try full resume; fall back to weights-only load if checkpoint lacks optimizer state
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            if "optimizer_states" in ckpt:
+                log.info(f"Full resume from {ckpt_path}")
+                trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
+            else:
+                log.info(f"Weights-only checkpoint detected. Loading model weights from {ckpt_path}")
+                # Direct load_state_dict bypasses on_load_checkpoint, so strip the stale
+                # SinusoidalPosEmb key (persistent in pre-rewrite checkpoints) here too
+                state_dict = ckpt["state_dict"]
+                for key in [k for k in state_dict if k.endswith("time_embeddings.emb_weights")]:
+                    del state_dict[key]
+                model.load_state_dict(state_dict)
+                del ckpt
+                trainer.fit(model=model, datamodule=datamodule)
+        else:
+            trainer.fit(model=model, datamodule=datamodule)
 
     train_metrics = trainer.callback_metrics
 
@@ -107,6 +211,9 @@ def main(cfg: DictConfig) -> float | None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     utils.extras(cfg)
+
+    # enable CUDA optimizations
+    setup_cuda_optimizations()
 
     # train the model
     metric_dict, _ = train(cfg)

@@ -1,13 +1,18 @@
 """Tests for matcha.data.text_mel_datamodule (collation, instantiation, utilities)."""
 
+import random
+
+import numpy as np
 import pytest
 import torch
 
 from matcha.data.text_mel_datamodule import (
     TextMelBatchCollate,
     TextMelDataModule,
+    TextMelDataset,
     parse_filelist,
 )
+from matcha.text import cleaned_text_to_sequence
 from matcha.utils.audio import mel_spectrogram
 from matcha.utils.model import fix_len_compatibility
 
@@ -131,6 +136,21 @@ class TestTextMelDataModuleInstantiation:
         dm.teardown(stage="fit")
         dm.teardown(stage="test")
         dm.teardown(stage=None)
+
+    @pytest.mark.parametrize("load_durations", [True, False])
+    def test_dataloaders_pass_load_durations_to_collate(self, tmp_path, load_durations):
+        """load_durations must be wired through to the dataloader collate_fn so
+        that duration-return semantics stay consistent with the dataset."""
+        flist = tmp_path / "filelist.txt"
+        flist.write_text("dummy.wav|hello\n", encoding="utf-8")
+        hp = _default_hparams()
+        hp["train_filelist_path"] = str(flist)
+        hp["valid_filelist_path"] = str(flist)
+        hp["load_durations"] = load_durations
+        dm = TextMelDataModule(**hp)
+        dm.setup()
+        assert dm.train_dataloader().collate_fn.load_durations is load_durations
+        assert dm.val_dataloader().collate_fn.load_durations is load_durations
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +394,276 @@ class TestMelSpectrogram:
         mel1 = mel_spectrogram(waveform, **kwargs)
         mel2 = mel_spectrogram(waveform, **kwargs)
         assert torch.allclose(mel1, mel2)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for filelist-backed datamodule / dataset construction
+# ---------------------------------------------------------------------------
+
+
+def _write_filelist(tmp_path, line="dummy.wav|a i u", name="filelist.txt"):
+    """Write a one-line filelist and return its path as a string."""
+    flist = tmp_path / name
+    flist.write_text(line + "\n", encoding="utf-8")
+    return str(flist)
+
+
+def _make_dataset(tmp_path, language="ja", load_durations=False, name="filelist.txt"):
+    """Build a TextMelDataset over a tiny filelist (basic_cleaners, no pyopenjtalk needed)."""
+    return TextMelDataset(
+        filelist_path=_write_filelist(tmp_path, name=name),
+        n_spks=1,
+        cleaners=["basic_cleaners"],
+        add_blank=True,
+        seed=42,
+        load_durations=load_durations,
+        language=language,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Language plumbing (TextMelDataModule.setup)
+# ---------------------------------------------------------------------------
+
+
+class TestLanguagePlumbing:
+    """setup() must forward the `language` hparam to both train and valid datasets."""
+
+    def _datamodule(self, tmp_path, **overrides):
+        flist = _write_filelist(tmp_path)
+        hp = _default_hparams()
+        hp["train_filelist_path"] = flist
+        hp["valid_filelist_path"] = flist
+        hp.update(overrides)
+        dm = TextMelDataModule(**hp)
+        dm.setup()
+        return dm
+
+    def test_language_ja_reaches_both_datasets(self, tmp_path):
+        dm = self._datamodule(tmp_path, language="ja")
+        assert dm.trainset.language == "ja"
+        assert dm.validset.language == "ja"
+
+    def test_language_defaults_to_en_when_omitted(self, tmp_path):
+        """Omitting `language` falls back to 'en' (getattr default in setup)."""
+        dm = self._datamodule(tmp_path)
+        assert dm.trainset.language == "en"
+        assert dm.validset.language == "en"
+
+
+# ---------------------------------------------------------------------------
+# TextMelDataset.get_text — Japanese language dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestGetTextJapanese:
+    """get_text must dispatch to the Japanese symbol table when language='ja'.
+
+    Uses basic_cleaners over space-separated phonemes so no pyopenjtalk is
+    required (same trick as tests/test_text_ja.py).
+    """
+
+    TEXT = "k o N n i ch i w a"
+
+    def test_blank_interspersed_ja_ids(self, tmp_path):
+        ds = _make_dataset(tmp_path, language="ja")
+        x, cleaned = ds.get_text(self.TEXT, add_blank=True)
+        expected_ids = cleaned_text_to_sequence(cleaned, language="ja")
+        # Odd positions carry the phoneme ids, even positions are blanks (0)
+        assert x[1::2].tolist() == expected_ids
+        assert (x[0::2] == 0).all()
+        assert len(x) == 2 * len(expected_ids) + 1
+
+    def test_ja_one_id_per_token(self, tmp_path):
+        ds = _make_dataset(tmp_path, language="ja")
+        x, _ = ds.get_text(self.TEXT, add_blank=True)
+        n_tokens = len(self.TEXT.split())
+        assert len(x[1::2]) == n_tokens
+
+    def test_en_and_ja_encodings_differ(self, tmp_path):
+        ds_ja = _make_dataset(tmp_path, language="ja", name="filelist_ja.txt")
+        ds_en = _make_dataset(tmp_path, language="en", name="filelist_en.txt")
+        x_ja, _ = ds_ja.get_text(self.TEXT, add_blank=True)
+        x_en, _ = ds_en.get_text(self.TEXT, add_blank=True)
+        # ja encodes one id per space-separated token, en one id per character
+        assert x_ja.tolist() != x_en.tolist()
+
+    def test_add_blank_false_overrides_dataset_default(self, tmp_path):
+        """An explicit add_blank=False must win over the dataset's add_blank=True."""
+        ds = _make_dataset(tmp_path, language="ja")  # ds.add_blank is True
+        x, cleaned = ds.get_text(self.TEXT, add_blank=False)
+        expected_ids = cleaned_text_to_sequence(cleaned, language="ja")
+        assert x.tolist() == expected_ids  # no interspersed blanks
+
+    def test_add_blank_default_uses_dataset_setting(self, tmp_path):
+        """Omitting add_blank (None) falls back to the dataset's add_blank."""
+        ds = _make_dataset(tmp_path, language="ja")
+        x_default, _ = ds.get_text(self.TEXT)
+        x_true, _ = ds.get_text(self.TEXT, add_blank=True)
+        assert x_default.tolist() == x_true.tolist()
+
+
+# ---------------------------------------------------------------------------
+# TextMelDataset — seeded shuffle isolation
+# ---------------------------------------------------------------------------
+
+
+class TestSeededShuffleIsolation:
+    """The seeded filelist shuffle must use a local RNG, not reseed the global
+    random module (a process-wide side effect)."""
+
+    def _multi_line_filelist(self, tmp_path):
+        lines = "\n".join(f"audio_{i:02d}.wav|text {i}" for i in range(10))
+        flist = tmp_path / "filelist.txt"
+        flist.write_text(lines + "\n", encoding="utf-8")
+        return str(flist)
+
+    def _dataset(self, tmp_path, seed):
+        return TextMelDataset(
+            filelist_path=self._multi_line_filelist(tmp_path),
+            n_spks=1,
+            cleaners=["basic_cleaners"],
+            seed=seed,
+        )
+
+    def test_global_random_state_untouched(self, tmp_path):
+        random.seed(999)
+        state_before = random.getstate()
+        self._dataset(tmp_path, seed=42)
+        assert random.getstate() == state_before
+
+    def test_same_seed_gives_identical_order(self, tmp_path):
+        ds1 = self._dataset(tmp_path, seed=42)
+        ds2 = self._dataset(tmp_path, seed=42)
+        assert ds1.filepaths_and_text == ds2.filepaths_and_text
+
+
+# ---------------------------------------------------------------------------
+# TextMelDataset.get_durations
+# ---------------------------------------------------------------------------
+
+
+class TestGetDurations:
+    """get_durations resolves <data_dir>/durations/<name>.npy relative to the wav path."""
+
+    def _layout(self, tmp_path):
+        """Create <tmp_path>/data_dir/{wavs,durations} and return the two paths.
+
+        The wav file itself is never opened by get_durations — only its path matters.
+        """
+        wav_dir = tmp_path / "data_dir" / "wavs"
+        dur_dir = tmp_path / "data_dir" / "durations"
+        wav_dir.mkdir(parents=True)
+        dur_dir.mkdir(parents=True)
+        return wav_dir / "utt1.wav", dur_dir / "utt1.npy"
+
+    def _text_tensor(self, tmp_path):
+        ds = _make_dataset(tmp_path, language="ja", load_durations=True)
+        text, _ = ds.get_text("a i u", add_blank=True)  # interspersed: 2*3 + 1 = 7
+        return ds, text
+
+    def test_matching_length_returns_saved_values(self, tmp_path):
+        wav_path, dur_path = self._layout(tmp_path)
+        ds, text = self._text_tensor(tmp_path)
+        saved = np.array([1, 2, 3, 4, 5, 6, 7])
+        np.save(dur_path, saved)
+
+        durs = ds.get_durations(str(wav_path), text)
+
+        assert isinstance(durs, torch.Tensor)
+        assert not durs.dtype.is_floating_point
+        assert durs.tolist() == saved.tolist()
+        assert len(durs) == len(text)
+
+    def test_length_mismatch_raises_value_error(self, tmp_path):
+        """Length mismatch must raise ValueError (not a bare assert, which is
+        disabled under python -O)."""
+        wav_path, dur_path = self._layout(tmp_path)
+        ds, text = self._text_tensor(tmp_path)
+        np.save(dur_path, np.array([1, 2, 3]))  # 3 != 7
+
+        with pytest.raises(ValueError, match="do not match"):
+            ds.get_durations(str(wav_path), text)
+
+    def test_missing_npy_raises_with_guidance(self, tmp_path):
+        wav_path, _ = self._layout(tmp_path)  # .npy intentionally not written
+        ds, text = self._text_tensor(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match="make sure you've generated the durations"):
+            ds.get_durations(str(wav_path), text)
+
+
+# ---------------------------------------------------------------------------
+# DataLoader kwargs guard (persistent_workers / prefetch_factor)
+# ---------------------------------------------------------------------------
+
+
+class TestDataLoaderKwargs:
+    """num_workers=0 must not pass persistent_workers/prefetch_factor to DataLoader.
+
+    Constructing the DataLoaders is side-effect free (no workers spawned, no
+    audio opened), so these tests never iterate them.
+    """
+
+    def _datamodule(self, tmp_path, num_workers=0):
+        flist = _write_filelist(tmp_path)
+        hp = _default_hparams()
+        hp["train_filelist_path"] = flist
+        hp["valid_filelist_path"] = flist
+        hp["num_workers"] = num_workers
+        dm = TextMelDataModule(**hp)
+        dm.setup()
+        return dm
+
+    def test_zero_workers_constructs_without_persistence(self, tmp_path):
+        dm = self._datamodule(tmp_path, num_workers=0)
+        train_dl = dm.train_dataloader()  # would raise if persistent_workers were passed
+        val_dl = dm.val_dataloader()
+        assert train_dl.num_workers == 0
+        assert train_dl.persistent_workers is False
+        assert val_dl.persistent_workers is False
+
+    def test_train_drops_last_val_keeps_last(self, tmp_path):
+        dm = self._datamodule(tmp_path, num_workers=0)
+        assert dm.train_dataloader().drop_last is True
+        assert dm.val_dataloader().drop_last is False
+
+    def test_positive_workers_enable_persistence(self, tmp_path):
+        dm = self._datamodule(tmp_path, num_workers=2)
+        train_dl = dm.train_dataloader()
+        val_dl = dm.val_dataloader()
+        assert train_dl.persistent_workers is True
+        assert train_dl.prefetch_factor == 4
+        assert val_dl.persistent_workers is True
+        assert val_dl.prefetch_factor == 4
+
+
+# ---------------------------------------------------------------------------
+# mel_spectrogram — exact frame count with center=False
+# ---------------------------------------------------------------------------
+
+
+class TestMelSpectrogramExactFrames:
+    """With center=False and the (n_fft - hop)/2 reflect pad, the frame count
+    must be exactly 1 + (L - hop) // hop == L // hop for any sample length L."""
+
+    @pytest.mark.parametrize("length", [4 * 256, 4 * 256 + 1, 4 * 256 + 255, 7 * 256 + 128])
+    def test_exact_frame_count(self, length):
+        torch.manual_seed(0)
+        waveform = torch.rand(1, length) * 1.8 - 0.9  # in [-0.9, 0.9]
+        mel = mel_spectrogram(
+            waveform,
+            n_fft=1024,
+            num_mels=80,
+            sampling_rate=22050,
+            hop_size=256,
+            win_size=1024,
+            fmin=0,
+            fmax=8000,
+            center=False,
+        )
+        expected_frames = 1 + (length - 256) // 256
+        assert expected_frames == length // 256
+        assert mel.shape == (1, 80, expected_frames)
+        assert torch.isfinite(mel).all()
+        assert mel.dtype == torch.float32

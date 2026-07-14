@@ -1,0 +1,14 @@
+# @package _global_
+
+# Japanese multi-speaker TTS training with JVS corpus (100 speakers)
+# To execute: python matcha/train.py experiment=jvs
+
+defaults:
+  - override /data: jvs.yaml
+
+tags: ["jvs", "japanese", "multispeaker"]
+
+run_name: jvs
+
+model:
+  n_vocab: 55

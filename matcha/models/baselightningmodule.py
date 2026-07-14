@@ -3,9 +3,8 @@ This is a base lightning module that can be used to train a model.
 The benefit of this abstraction is that all the logic outside of model definition can be reused for different models.
 """
 
-import inspect
 from abc import ABC
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from lightning import LightningModule
@@ -15,6 +14,66 @@ from matcha import utils
 from matcha.utils.utils import plot_tensor
 
 log = utils.get_pylogger(__name__)
+
+
+def _log_image(logger, tag, image_hwc, step):
+    """Log an HWC image array to whichever logger is active (TensorBoard or WandB).
+
+    TensorBoard exposes ``experiment.add_image``; WandB's ``Run`` does not (it uses
+    ``log_image`` on the WandbLogger). Anything else is silently skipped so training
+    never crashes on the visualization path.
+    """
+    exp = getattr(logger, "experiment", None)
+    if exp is not None and hasattr(exp, "add_image"):
+        exp.add_image(tag, image_hwc, step, dataformats="HWC")
+        return
+    if hasattr(logger, "log_image"):  # WandbLogger
+        logger.log_image(key=tag, images=[image_hwc], step=step)
+
+
+def _cfg_get(cfg, key, default=None):
+    """Read a key from a dict / DictConfig / namespace-like scheduler config."""
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def build_warmup_cosine_scheduler(optimizer, scheduler_cfg):
+    """Build a SequentialLR with linear warmup followed by cosine decay.
+
+    Args:
+        optimizer: The optimizer instance.
+        scheduler_cfg: A dict-like config with keys:
+            warmup_steps (int): Number of warmup steps (default 500).
+            start_factor (float): Initial lr multiplier (default 0.1).
+            T_max (int): Total cosine annealing steps (default 20000).
+            eta_min (float): Minimum lr for cosine decay (default 5e-5).
+
+    Returns:
+        A SequentialLR scheduler (stepped per training step by the caller).
+    """
+    warmup_steps = int(_cfg_get(scheduler_cfg, "warmup_steps", 500))
+    start_factor = float(_cfg_get(scheduler_cfg, "start_factor", 0.1))
+    T_max = int(_cfg_get(scheduler_cfg, "T_max", 20000))
+    eta_min = float(_cfg_get(scheduler_cfg, "eta_min", 5e-5))
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=start_factor,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=T_max,
+        eta_min=eta_min,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_steps],
+    )
+    return scheduler
 
 
 class BaseLightningClass(LightningModule, ABC):
@@ -30,29 +89,48 @@ class BaseLightningClass(LightningModule, ABC):
 
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
-        if self.hparams.scheduler not in (None, {}):
-            scheduler_args = {}
-            # Manage last epoch for exponential schedulers
-            if "last_epoch" in inspect.signature(self.hparams.scheduler.scheduler).parameters:
-                if hasattr(self, "ckpt_loaded_epoch"):
-                    current_epoch = self.ckpt_loaded_epoch - 1
-                else:
-                    current_epoch = -1
+        scheduler_cfg = getattr(self.hparams, "scheduler", None)
+        if scheduler_cfg is None:
+            return {"optimizer": optimizer}
 
-            scheduler_args.update({"optimizer": optimizer})
-            scheduler = self.hparams.scheduler.scheduler(**scheduler_args)
-            scheduler.last_epoch = current_epoch
+        # Directly callable Hydra _partial_ (e.g. linear_warmup_cosine.yaml)
+        if callable(scheduler_cfg):
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler_cfg(optimizer=optimizer),
+                    "interval": "epoch",
+                },
+            }
+
+        # Dict-based config without _target_ (warmup_cosine_safe.yaml)
+        if _cfg_get(scheduler_cfg, "type") == "warmup_cosine_safe":
+            scheduler = build_warmup_cosine_scheduler(optimizer, scheduler_cfg)
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": self.hparams.scheduler.lightning_args.interval,
-                    "frequency": self.hparams.scheduler.lightning_args.frequency,
-                    "name": "learning_rate",
+                    "interval": "step",
                 },
             }
 
-        return {"optimizer": optimizer}
+        # Nested form: scheduler (_partial_) + lightning_args (e.g. warmup_cosine.yaml)
+        inner = _cfg_get(scheduler_cfg, "scheduler")
+        if callable(inner):
+            lightning_args = _cfg_get(scheduler_cfg, "lightning_args") or {}
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": inner(optimizer=optimizer),
+                    "interval": _cfg_get(lightning_args, "interval", "epoch"),
+                    "frequency": _cfg_get(lightning_args, "frequency", 1),
+                },
+            }
+
+        raise ValueError(
+            "Unsupported scheduler config: expected a callable partial, type=warmup_cosine_safe, "
+            f"or a nested scheduler/lightning_args form, got: {scheduler_cfg!r}"
+        )
 
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]
@@ -76,109 +154,67 @@ class BaseLightningClass(LightningModule, ABC):
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         self.ckpt_loaded_epoch = checkpoint["epoch"]  # pylint: disable=attribute-defined-outside-init
+        # SinusoidalPosEmb.emb_weights is a non-persistent buffer (rebuilt at construction),
+        # but checkpoints saved before persistent=False carry the key; strip it so
+        # strict loading works for both checkpoint generations. EMA checkpoints
+        # (WeightAveraging) hold a second full copy under "current_model_state" that
+        # the callback strict-loads after this hook runs, so strip it there too.
+        for payload_name in ("state_dict", "current_model_state"):
+            state_dict = checkpoint.get(payload_name)
+            if state_dict is not None:
+                for key in [k for k in state_dict if k.endswith("time_embeddings.emb_weights")]:
+                    del state_dict[key]
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        self.log(
-            "step",
-            float(self.global_step),
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-        )
-
-        self.log(
-            "sub_loss/train_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/train_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/train_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-
         total_loss = sum(loss_dict.values())
-        self.log(
-            "loss/train",
-            total_loss,
+
+        self.log_dict(
+            {
+                "sub_loss/train_dur_loss": loss_dict["dur_loss"],
+                "sub_loss/train_prior_loss": loss_dict["prior_loss"],
+                "sub_loss/train_diff_loss": loss_dict["diff_loss"],
+                "loss/train": total_loss,
+            },
             on_step=True,
             on_epoch=True,
             logger=True,
             prog_bar=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         return {"loss": total_loss, "log": loss_dict}
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        self.log(
-            "sub_loss/val_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/val_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-        self.log(
-            "sub_loss/val_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-        )
-
         total_loss = sum(loss_dict.values())
-        self.log(
-            "loss/val",
-            total_loss,
+
+        self.log_dict(
+            {
+                "sub_loss/val_dur_loss": loss_dict["dur_loss"],
+                "sub_loss/val_prior_loss": loss_dict["prior_loss"],
+                "sub_loss/val_diff_loss": loss_dict["diff_loss"],
+                "loss/val": total_loss,
+            },
             on_step=True,
             on_epoch=True,
             logger=True,
             prog_bar=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         return total_loss
 
     def on_validation_end(self) -> None:
         if self.trainer.is_global_zero:
+            if self.current_epoch % 10 != 0:
+                return
             one_batch = next(iter(self.trainer.val_dataloaders))
             if self.current_epoch == 0:
                 log.debug("Plotting original samples")
                 for i in range(2):
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
-                    self.logger.experiment.add_image(
-                        f"original/{i}",
-                        plot_tensor(y.squeeze().cpu()),
-                        self.current_epoch,
-                        dataformats="HWC",
-                    )
+                    _log_image(self.logger, f"original/{i}", plot_tensor(y.squeeze().cpu()), self.current_epoch)
 
             log.debug("Synthesising...")
             for i in range(2):
@@ -188,24 +224,11 @@ class BaseLightningClass(LightningModule, ABC):
                 output = self.synthesise(x[:, :x_lengths], x_lengths, n_timesteps=10, spks=spks)
                 y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                 attn = output["attn"]
-                self.logger.experiment.add_image(
-                    f"generated_enc/{i}",
-                    plot_tensor(y_enc.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"generated_dec/{i}",
-                    plot_tensor(y_dec.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"alignment/{i}",
-                    plot_tensor(attn.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
+                _log_image(self.logger, f"generated_enc/{i}", plot_tensor(y_enc.squeeze().cpu()), self.current_epoch)
+                _log_image(self.logger, f"generated_dec/{i}", plot_tensor(y_dec.squeeze().cpu()), self.current_epoch)
+                _log_image(self.logger, f"alignment/{i}", plot_tensor(attn.squeeze().cpu()), self.current_epoch)
 
     def on_before_optimizer_step(self, optimizer):
-        self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})
+        grad_norm_interval = getattr(self, "grad_norm_log_interval", 500)
+        if grad_norm_interval > 0 and self.global_step % grad_norm_interval == 0:
+            self.log_dict({f"grad_norm/{k}": v for k, v in grad_norm(self, norm_type=2).items()})

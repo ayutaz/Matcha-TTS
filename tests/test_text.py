@@ -52,6 +52,7 @@ sys.modules["phonemizer.backend.espeak.espeak"] = _fake_espeak_espeak
 
 # Now it is safe to import the text modules ---------------------------------
 from matcha.text import (  # noqa: E402
+    UnknownCleanerException,
     _id_to_symbol,
     _symbol_to_id,
     cleaned_text_to_sequence,
@@ -166,6 +167,12 @@ class TestTextSequenceConversion:
         # The null character is not in the symbol table.
         with pytest.raises(KeyError):
             cleaned_text_to_sequence("\x00")
+
+    def test_unknown_cleaner_raises(self):
+        """A cleaner name that does not exist must raise UnknownCleanerException,
+        not AttributeError (regression for the dead getattr guard)."""
+        with pytest.raises(UnknownCleanerException, match="no_such_cleaner"):
+            text_to_sequence("hello", ["no_such_cleaner"])
 
 
 # ---------------------------------------------------------------------------

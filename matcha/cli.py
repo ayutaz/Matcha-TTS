@@ -2,6 +2,7 @@ import argparse
 import datetime as dt
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -25,6 +26,9 @@ MATCHA_URLS = {
 VOCODER_URLS = {
     "hifigan_T2_v1": "https://github.com/shivammehta25/Matcha-TTS-checkpoints/releases/download/v1.0/generator_v1",  # Old url: https://drive.google.com/file/d/14NENd4equCBLyyCSke114Mv6YR_j_uFs/view?usp=drive_link
     "hifigan_univ_v1": "https://github.com/shivammehta25/Matcha-TTS-checkpoints/releases/download/v1.0/g_02500000",  # Old url: https://drive.google.com/file/d/1qpgI41wNXFcH-iKq1Y42JlBC9j0je8PW/view?usp=drive_link
+    # WaveNeXt (iSTFT-free ConvNeXt vocoder, Apache-2.0). Mel-compatible with Matcha
+    # (22050/80/1024/256/fmax8000, Slaney, log(clamp,1e-5)). ONNX/mobile friendly.
+    "wavenext": "https://huggingface.co/BSC-LT/wavenext-mel/resolve/main/pytorch_model.bin",
 }
 
 MULTISPEAKER_MODEL = {
@@ -45,16 +49,20 @@ def plot_spectrogram_to_numpy(spectrogram, filename):
     plt.savefig(filename)
 
 
-def process_text(i: int, text: str, device: torch.device):
+def process_text(i: int, text: str, device: torch.device, cleaners=None, language="en"):
+    if cleaners is None:
+        cleaners = ["japanese_cleaners"] if language == "ja" else ["english_cleaners2"]
     print(f"[{i}] - Input text: {text}")
     x = torch.tensor(
-        intersperse(text_to_sequence(text, ["english_cleaners2"])[0], 0),
+        intersperse(text_to_sequence(text, cleaners, language=language)[0], 0),
         dtype=torch.long,
         device=device,
     )[None]
     x_lengths = torch.tensor([x.shape[-1]], dtype=torch.long, device=device)
-    x_phones = sequence_to_text(x.squeeze(0).tolist())
-    print(f"[{i}] - Phonetised text: {x_phones[1::2]}")
+    x_phones = sequence_to_text(x.squeeze(0).tolist(), language=language)
+    # Skip interspersed blank tokens: space-separated (ja) vs char-level (en)
+    phones_display = " ".join(x_phones.split()[1::2]) if language == "ja" else x_phones[1::2]
+    print(f"[{i}] - Phonetised text: {phones_display}")
 
     return {"x_orig": text, "x": x, "x_lengths": x_lengths, "x_phones": x_phones}
 
@@ -64,13 +72,14 @@ def get_texts(args):
         texts = [args.text]
     else:
         with open(args.file, encoding="utf-8") as f:
-            texts = f.readlines()
+            texts = [line.strip() for line in f if line.strip()]
     return texts
 
 
 def assert_required_models_available(args):
     save_dir = get_user_data_dir()
-    if not hasattr(args, "checkpoint_path") and args.checkpoint_path is None:
+    if getattr(args, "checkpoint_path", None) is not None:
+        # Custom checkpoint provided: skip the pretrained-model download check
         model_path = args.checkpoint_path
     else:
         model_path = save_dir / f"{args.model}.ckpt"
@@ -90,11 +99,33 @@ def load_hifigan(checkpoint_path, device):
     return hifigan
 
 
+def load_wavenext(checkpoint_path, device):
+    from matcha.wavenext import WaveNeXtVocoder
+
+    wavenext = WaveNeXtVocoder().to(device)
+    try:
+        sd = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    except Exception:  # noqa: BLE001 - fall back for non-plain-tensor checkpoints (BSC weights are trusted)
+        sd = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(sd, dict) and "state_dict" in sd:  # guard if a full .ckpt is passed
+        sd = sd["state_dict"]
+    # The Matcha input mel is produced by matcha/utils/audio.py, so the vocoder's own
+    # torchaudio feature_extractor.* weights are not needed and are dropped.
+    sd = {k: v for k, v in sd.items() if not k.startswith("feature_extractor.")}
+    missing, unexpected = wavenext.load_state_dict(sd, strict=False)
+    assert not missing, f"WaveNeXt missing keys: {missing}"
+    assert not unexpected, f"WaveNeXt unexpected keys (after dropping feature_extractor.*): {unexpected}"
+    _ = wavenext.eval()
+    return wavenext
+
+
 def load_vocoder(vocoder_name, checkpoint_path, device):
     print(f"[!] Loading {vocoder_name}!")
     vocoder = None
     if vocoder_name in ("hifigan_T2_v1", "hifigan_univ_v1"):
         vocoder = load_hifigan(checkpoint_path, device)
+    elif vocoder_name == "wavenext":
+        vocoder = load_wavenext(checkpoint_path, device)
     else:
         raise NotImplementedError(
             f"Vocoder {vocoder_name} not implemented! define a load_<<vocoder_name>> method for it"
@@ -147,8 +178,8 @@ def validate_args(args):
             args = validate_args_for_multispeaker_model(args)
     else:
         # When using a custom model
-        if args.vocoder != "hifigan_univ_v1":
-            warn_ = "[-] Using custom model checkpoint! I would suggest passing --vocoder hifigan_univ_v1, unless the custom model is trained on LJ Speech."
+        if args.vocoder not in ("hifigan_univ_v1", "wavenext"):
+            warn_ = "[-] Using custom model checkpoint! I would suggest passing --vocoder hifigan_univ_v1 (or wavenext), unless the custom model is trained on LJ Speech."
             warnings.warn(warn_, UserWarning)
         if args.speaking_rate is None:
             args.speaking_rate = 1.0
@@ -246,7 +277,7 @@ def cli():
         default=None,
         help="change the speaking rate, a higher value means slower speaking rate (default: 1.0)",
     )
-    parser.add_argument("--steps", type=int, default=10, help="Number of ODE steps  (default: 10)")
+    parser.add_argument("--steps", type=int, default=5, help="Number of ODE steps  (default: 5)")
     parser.add_argument("--cpu", action="store_true", help="Use CPU for inference (default: use GPU if available)")
     parser.add_argument(
         "--denoiser_strength",
@@ -264,12 +295,30 @@ def cli():
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size only useful when --batched (default: 32)"
     )
+    parser.add_argument(
+        "--language",
+        type=str,
+        default=None,
+        choices=["en", "ja"],
+        help="Language for text processing (default: auto-detect from model)",
+    )
+    parser.add_argument(
+        "--cleaners",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Text cleaners to use (default: auto-selected based on --language)",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Use aggressive 'max-autotune' compilation mode instead of default 'reduce-overhead' (CUDA only)",
+    )
 
     args = parser.parse_args()
 
     args = validate_args(args)
     device = get_device(args)
-    print_config(args)
     paths = assert_required_models_available(args)
 
     if args.checkpoint_path is not None:
@@ -279,6 +328,38 @@ def cli():
 
     model = load_matcha(args.model, paths["matcha"], device)
     vocoder, denoiser = load_vocoder(args.vocoder, paths["vocoder"], device)
+
+    # Compile model and vocoder for faster inference on CUDA
+    if device.type == "cuda":
+        compile_mode = "max-autotune" if args.compile else "reduce-overhead"
+        print(f"[+] Compiling model and vocoder with torch.compile (mode={compile_mode})...")
+        model.encoder = torch.compile(model.encoder, mode=compile_mode)
+        model.decoder.estimator = torch.compile(model.decoder.estimator, mode=compile_mode)
+        vocoder = torch.compile(vocoder, mode=compile_mode)
+
+    # GPU warmup to trigger CUDA kernel caching
+    if device.type == "cuda":
+        print("[+] Running GPU warmup...")
+        with torch.inference_mode():
+            dummy_x = torch.zeros(1, 10, dtype=torch.long, device=device)
+            dummy_x_lengths = torch.tensor([10], dtype=torch.long, device=device)
+            dummy_spks = torch.zeros(1, dtype=torch.long, device=device) if model.n_spks > 1 else None
+            model.synthesise(dummy_x, dummy_x_lengths, n_timesteps=2, spks=dummy_spks)
+        print("[+] Warmup complete.")
+
+    # Auto-detect language from model if not explicitly set
+    if args.language is None:
+        if hasattr(model, "n_vocab") and model.n_vocab == 55:
+            args.language = "ja"
+            print("[*] Auto-detected language: Japanese (n_vocab=55)")
+        else:
+            args.language = "en"
+
+    # Set cleaners if not explicitly provided
+    if args.cleaners is None:
+        args.cleaners = ["japanese_cleaners"] if args.language == "ja" else None
+
+    print_config(args)
 
     texts = get_texts(args)
 
@@ -316,13 +397,31 @@ def batched_collate_fn(batch):
 def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
     total_rtf = []
     total_rtf_w = []
-    processed_text = [process_text(i, text, "cpu") for i, text in enumerate(texts)]
+    with ThreadPoolExecutor(max_workers=min(8, len(texts))) as executor:
+        processed_text = list(
+            executor.map(
+                process_text,
+                range(len(texts)),
+                texts,
+                ["cpu"] * len(texts),
+                [args.cleaners] * len(texts),
+                [args.language] * len(texts),
+            )
+        )
+
+    # Sort by sequence length to reduce padding waste, track original indices
+    sorted_indices = sorted(range(len(processed_text)), key=lambda k: processed_text[k]["x"].shape[-1])
+    sorted_processed_text = [processed_text[idx] for idx in sorted_indices]
+
     dataloader = torch.utils.data.DataLoader(
-        BatchedSynthesisDataset(processed_text),
+        BatchedSynthesisDataset(sorted_processed_text),
         batch_size=args.batch_size,
         collate_fn=batched_collate_fn,
         num_workers=8,
     )
+
+    # Process batches; use global_idx to map back to original indices
+    global_idx = 0
     for i, batch in enumerate(dataloader):
         i = i + 1
         start_t = dt.datetime.now()
@@ -344,11 +443,18 @@ def batched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
         total_rtf.append(output["rtf"])
         total_rtf_w.append(rtf_w)
         for j in range(output["mel"].shape[0]):
-            base_name = f"utterance_{j:03d}_speaker_{args.spk:03d}" if args.spk is not None else f"utterance_{j:03d}"
             length = output["mel_lengths"][j]
             new_dict = {"mel": output["mel"][j][:, :length], "waveform": output["waveform"][j][: length * 256]}
+            # Map back to original index for naming
+            orig_idx = sorted_indices[global_idx]
+            base_name = (
+                f"utterance_{orig_idx:03d}_speaker_{args.spk:03d}"
+                if args.spk is not None
+                else f"utterance_{orig_idx:03d}"
+            )
             location = save_to_folder(base_name, new_dict, args.output_folder)
-            print(f"[🍵-{j}] Waveform saved: {location}")
+            print(f"[🍵-{orig_idx}] Waveform saved: {location}")
+            global_idx += 1
 
     print("".join(["="] * 100))
     print(f"[🍵] Average Matcha-TTS RTF: {np.mean(total_rtf):.4f} ± {np.std(total_rtf)}")
@@ -365,7 +471,7 @@ def unbatched_synthesis(args, device, model, vocoder, denoiser, texts, spk):
 
         print("".join(["="] * 100))
         text = text.strip()
-        text_processed = process_text(i, text, device)
+        text_processed = process_text(i, text, device, cleaners=args.cleaners, language=args.language)
 
         print(f"[🍵] Whisking Matcha-T(ea)TS for: {i}")
         start_t = dt.datetime.now()
@@ -399,6 +505,8 @@ def print_config(args):
     print("[!] Configurations: ")
     print(f"\t- Model: {args.model}")
     print(f"\t- Vocoder: {args.vocoder}")
+    print(f"\t- Language: {args.language}")
+    print(f"\t- Cleaners: {args.cleaners}")
     print(f"\t- Temperature: {args.temperature}")
     print(f"\t- Speaking rate: {args.speaking_rate}")
     print(f"\t- Number of ODE steps: {args.steps}")
@@ -409,6 +517,9 @@ def get_device(args):
     if torch.cuda.is_available() and not args.cpu:
         print("[+] GPU Available! Using GPU")
         device = torch.device("cuda")
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     else:
         print("[-] GPU not available or forced CPU run! Using CPU")
         device = torch.device("cpu")
